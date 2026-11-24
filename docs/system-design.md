@@ -1,6 +1,6 @@
 # System design
 
-The proposed prototype tests whether independent authorisation limits what a tool-using agent can do after prompt injection. The model submits untrusted requests. A trusted application supplies the identities and active delegation, and the gateway controls every tool invocation. The design runs on a single local host using synthetic resources and an isolated model process or a deterministic stub. The [threat model](threat-model.md), [access-control model](access-control.md) and [experimental design](experimental-design.md) define the security claims, fixture grants and comparisons.
+The proposed prototype tests whether independent authorisation limits what a tool-using agent can do after prompt injection. The model submits untrusted requests. A trusted local application supplies the identities and active delegation, and the gateway controls every tool invocation. Synthetic resources and simulated actions stay local and isolated. A provider-independent adapter supplies model responses. The [threat model](threat-model.md), [access-control model](access-control.md) and [experimental design](experimental-design.md) define the security claims, fixture grants and comparisons.
 
 ## Phase 1 review
 
@@ -18,7 +18,7 @@ Authentication, expiry and revocation, the protected resource boundary, safe too
 
 ## Components
 
-Each planned service may be a small module or interface within a trusted application. The model must run without access to the application modules, private stores and resource handles used to enforce policy.
+Each planned service may be a small module or interface within a trusted application. The model has no access to the application modules, private stores or resource handles used to enforce policy.
 
 | Component | Purpose, inputs and outputs | Trust assumptions and security implications | Status |
 | --- | --- | --- | --- |
@@ -27,6 +27,7 @@ Each planned service may be a small module or interface within a trusted applica
 | Agent Identity Store | Resolves the runtime's registered agent ID to an independent agent profile and grants | The runtime controls agent assignment and store writes. Independent grants constrain the same human differently depending on the assigned agent | `AgentIdentity` and in-memory fixtures exist. Runtime assignment and managed lookup are planned |
 | Task Delegation Manager | Takes trusted identity references and a task specification. Validates grants and issues, activates, completes, expires or revokes a bound delegation | The trusted control path owns lifecycle state. Model requests cannot cause a grant change | `TaskDelegation` has an active flag. Issuance, expiry, lifecycle and revocation are planned |
 | Trusted Execution Context | Carries the authenticated human, assigned agent, task and run identifiers from the trusted runtime to the gateway | Context comes from the active runtime session and is kept outside the model payload. A context-binding failure can apply another principal's grants | The Phase 1 record has human, agent and task IDs. Run binding and context integrity are planned |
+| Model Adapter | Translates synthetic conversation data and tool schemas to the selected backend or supplies deterministic responses. Returns text and proposed calls in the runtime's common format | The trusted runtime controls backend selection and data sent to it. Backend output remains untrusted and goes through the runtime and gateway before execution | Planned |
 | AI Agent / LLM | Consumes task instructions, tool schemas and permitted results. Returns proposed tool calls and final text | Model output, prompts and tool results are untrusted data. The model has no direct access to protected resources, identity or policy stores, or the executor | Planned |
 | Tool Request Validator | Uses the tool registry and resource catalogue to convert a raw request to a canonical tool, action, target and arguments, or reject it | Schema and canonicalisation code is trusted and rejects unknown tools, target IDs, extra fields and invalid arguments. Validation gives no authority | Phase 1 has a basic request check. Schema and catalogue validation are planned |
 | Authorisation Gateway | Receives the untrusted payload with a separately bound context, obtains validation and policy decisions, and dispatches allowed operations. Returns a sanitised result or denial | The gateway is the Policy Enforcement Point (PEP). Every tool dispatch passes through it. Failure paths and stale decisions must deny execution | Planned |
@@ -35,8 +36,8 @@ Each planned service may be a small module or interface within a trusted applica
 | Tool Registry | Resolves a declared tool name to a schema, action, accepted resource kind and executor handler | Registry entries are trusted. Handler choice and action mapping must originate here to prevent discrepancies between checked and executed operations | Planned |
 | Tool Executor | Accepts the canonical invocation only from the gateway and applies its operation to sandbox resources. Returns a structured effect or failure | Executor code, resource resolution and atomic mutations are trusted. Its interface is private and receives only the requested operation | Planned |
 | Sandbox Resources | Hold named document slots and simulated mailbox state. Provide scoped access to the executor | Storage integrity and catalogue metadata are trusted. Document and mail contents may contain untrusted instructions. Model isolation must hold even when content drives later requests | Planned |
-| Audit Logger | Receives gateway decisions, dispatch records and executor outcomes. Provides a local structured event stream | The application controls writes and excludes raw content. Loss, incompleteness and correlation errors affect enforcement assurance and evaluation | Planned |
-| Experiment Runner | Seeds isolated fixtures, establishes trusted runtime context, selects a policy mode and drives replay or local model trials. Emits run manifests and independent attempt records | The trusted harness controls initial conditions and mode. It routes every experimental tool call through the gateway | Planned |
+| Audit Logger | Receives gateway decisions, safe canonical arguments, dispatch records and executor outcomes. Provides a local structured event stream | The application controls writes and excludes raw content. Loss, incompleteness and correlation errors affect enforcement assurance and evaluation | Planned |
+| Experiment Runner | Seeds isolated fixtures, establishes trusted runtime context, selects policy and adapter modes, and drives replay, stub or LLM trials. Emits run manifests and independent attempt records | The trusted harness controls initial conditions and mode. It routes every experimental tool call through the gateway | Planned |
 | Evaluation Engine | Consumes run manifests, task-derived labels, audit events and sandbox observations. Computes metrics and reports missing observations | Ground truth is maintained independently of the tested policy. The evaluator is outside the model path and uses read-only observations | Planned |
 
 ## High-level architecture
@@ -49,8 +50,8 @@ flowchart LR
     Delegation --> Humans[Human identity store]
     Delegation --> Agents[Agent identity store]
     Runtime --> Context[Trusted execution context]
-    Runtime -->|Task and tool schemas| LLM[AI agent or LLM]
-    LLM -->|Proposed request| Runtime
+    Runtime <-->|Model inputs and proposals| Adapter[Model adapter]
+    Adapter <-->|Model messages only| LLM[AI agent or LLM]
     Runtime -->|Untrusted payload| Gateway[Authorisation gateway / PEP]
     Context -->|Bound context| Gateway
     Gateway --> Validator[Tool request validator]
@@ -71,22 +72,32 @@ flowchart LR
 
 The PDP answers whether a validated operation satisfies policy and returns a reason. The PEP owns the boundary to execution. It obtains the decision, checks it remains valid for the exact request, records the attempt and either invokes the executor or refuses it. These are logical responsibilities that can share a trusted application process. [NIST definition of PDP](https://csrc.nist.gov/glossary/term/policy_decision_point) · [NIST definition of PEP](https://csrc.nist.gov/glossary/term/policy_enforcement_point)
 
+## Model adapter
+
+- **Deterministic tool-call replay** supplies fixed proposals from a case manifest, including malformed requests when needed, without inference.
+- **Deterministic integration stub** supplies scripted turns and can respond to permitted results or denial statuses to exercise the conversation loop.
+- **Local tool-calling LLM** is the preferred initial inference backend. Its process is isolated from the sandbox and trusted stores.
+- **Hosted tool-calling LLM** is optional and requires explicit trusted configuration and a provider whose data handling fits the lab's constraints. The adapter sends only approved synthetic inputs, tool schemas and permitted synthetic result data. Protected resources and executor interfaces stay local. The provider receives no resource handles, execution tools, identity or policy records, or credentials in model inputs. The configured inference connection grants no authority to initiate sandbox or external actions.
+
+All modes submit proposed operations through the same runtime and gateway. The adapter selects the backend in trusted configuration and keeps its response format separate from the trusted execution context. Replay and stub exercise gateway and runtime behaviour. Claims about LLM behaviour require observations from an actual LLM. [Experimental methods](experimental-design.md#methods)
+
 ## Trust boundaries
 
 ```mermaid
 flowchart LR
-    subgraph Untrusted[Untrusted instructions and model process]
+    subgraph Untrusted[Untrusted inputs and model backend]
         Input[Human instructions and external fixture content]
-        Model[AI agent or LLM]
-        Input --> Model
+        Model[Local or hosted LLM]
     end
     subgraph Trusted[Trusted local application]
         Runtime[Session binding and trusted runtime]
+        Adapter[Model adapter]
         Gateway[Validator and authorisation gateway]
         Policy[Policy engine, identity and policy stores, delegations]
         Executor[Private tool executor]
         Audit[Audit logger]
         Runtime -->|Runtime context and untrusted payload| Gateway
+        Runtime <-->|Model inputs and proposals| Adapter
         Gateway <-->|Policy lookup and decision| Policy
         Gateway -->|Canonical allowed operation| Executor
         Gateway --> Audit
@@ -94,12 +105,13 @@ flowchart LR
     subgraph Data[Local synthetic resource boundary]
         Resources[Documents and simulated mail]
     end
-    Model -->|Proposed tool call or text| Runtime
-    Runtime -->|Schemas and authorised results as data| Model
+    Input -->|Untrusted synthetic task data| Runtime
+    Adapter -->|Approved synthetic inputs| Model
+    Model -->|Proposed tool call or text| Adapter
     Executor <-->|Scoped resource access and results| Resources
 ```
 
-The runtime binds context using its verified session and registered agent assignment. Any identity claim in prompt text remains data. Payload fields that purport to set identity or task authority fail request validation. Treat model-visible results as untrusted data even when the executor is trusted. Denials return coarse status without protected metadata. Keep the model process without sandbox storage, application authority or external tool access.
+The runtime binds context using its verified session and registered agent assignment. Any identity claim in prompt text remains data. Payload fields that purport to set identity or task authority fail request validation. Treat model-visible results as untrusted data even when the executor is trusted. Denials return coarse status without protected metadata. The backend exchanges model messages through the adapter and has no direct access to sandbox storage, application authority or external tools.
 
 ## Normal execution
 
@@ -180,4 +192,10 @@ flowchart TD
     Observe --> Respond[Return permitted result or execution failure]
 ```
 
-Dispatch admission checks policy and delegation state in the same serialised boundary as revocation, using the validated request and its current records. An admitted tool operation can still fail its resource preconditions. Persist the pre-dispatch decision before invoking the tool, correlate any dispatch and outcome to it, and report missing outcome records as logging failures. Record only approved metadata such as opaque run and request IDs, timing, canonical operation identifiers and reason codes. Recovery after a mutation with an uncertain outcome must first determine whether the mutation committed. See the [access-control lifecycle rules](access-control.md#authorisation-rules-and-lifecycle) and [measurement protocol](experimental-design.md).
+Dispatch admission checks policy and delegation state in the same serialised boundary as revocation, using the validated request and its current records. An admitted tool operation can still fail its resource preconditions. Persist the pre-dispatch decision before invoking the tool, correlate any dispatch and outcome to it, and report missing outcome records as logging failures. Recovery after a mutation with an uncertain outcome must first determine whether the mutation committed. See the [access-control lifecycle rules](access-control.md#authorisation-rules-and-lifecycle) and [measurement protocol](experimental-design.md).
+
+### Audit argument recording
+
+Record the requested canonical tool and action and explicitly allowlisted security-relevant arguments, such as the registered synthetic resource ID and destination ID, when available. This includes a registered destination that is denied by task policy. Correlate these fields with opaque run, request and binding IDs, the policy mode, versions of the applicable policy, identity grants and delegation, timing, the decision and the reason code. Record the control that failed, including a final admission failure after a preliminary allow, so the decision can be reconstructed against the recorded configuration.
+
+For unknown identifiers, malformed arguments or redacted fields, record a safe validation status or omission marker and the relevant control result, such as `DESTINATION_UNREGISTERED` or a failed length check. Keep raw prompts, document contents, search text, message subjects and bodies, credentials and unchecked argument values out of the audit log. Restrict log access to the trusted application and evaluation path.

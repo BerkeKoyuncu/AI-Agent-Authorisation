@@ -43,8 +43,8 @@ The demo uses a synthetic trusted context. It prints an allowed meeting-note rea
 
 ## Development sequence
 
-Foundation and design are followed by the sandbox, identity and delegation, the gateway, local LLM integration, synthetic scenarios, audit logging and security testing, experimental evaluation, then the demo and final report. The next implementation phase is the [synthetic sandbox](docs/roadmap.md#core-phases).
+Foundation and design are followed by the sandbox, identity and delegation, the gateway, provider-independent LLM integration, synthetic scenarios, audit logging and security testing, experimental evaluation, then the demo and final report. The next implementation phase is the [synthetic sandbox](docs/roadmap.md#core-phases).
 
 ## Scope and safety
 
-The authorisation boundary is intended to limit tool effects after prompt injection. Manipulated summaries, harmful behaviour within the allowed scope and leakage through permitted output channels remain possible. The evaluation is confined to local synthetic documents, simulated mailboxes and invented identities. Simulated mail is written only to a local outbox. Real personal or confidential data, real email, production systems, credentials, arbitrary shell execution and unrestricted filesystem tools are outside the project scope.
+The authorisation boundary is intended to limit tool effects after prompt injection. Manipulated summaries, harmful behaviour within the allowed scope and leakage through permitted output channels remain possible. The evaluation uses synthetic documents, simulated mailboxes and invented identities. All resources and simulated actions stay local and isolated. The model adapter prefers local inference and allows explicitly configured hosted inference with approved synthetic inputs only. Real personal or confidential data, real email, production enterprise systems, credentials in project files or model inputs, arbitrary shell execution and unrestricted filesystem tools are outside the project scope. [Model adapter](docs/system-design.md#model-adapter)

@@ -12,7 +12,7 @@ The system evaluates whether a trusted authorisation boundary limits unauthorise
 | Human and agent identities | Authentic binding of each principal to the current session and prevention of model-controlled substitutions |
 | Task delegation records | Integrity of the approved scope, identity bindings, version, validity and lifecycle state |
 | Security policies | Integrity and provenance of grants, predicates, tool mappings and policy mode |
-| Audit logs | Integrity, completeness and correlation of decisions, dispatches and outcomes without storing protected contents |
+| Audit logs | Integrity, completeness and correlation of decisions, safe canonical arguments, dispatches and outcomes without storing protected contents |
 | Integrity of sandbox resources | Correct fixture initialisation, no unauthorised mutations and isolation across trials |
 
 ## Threat actors
@@ -42,11 +42,12 @@ The categories overlap. For example, indirect injection can induce a data-exfilt
 | Boundary | Trusted side | Untrusted inputs crossing it |
 | --- | --- | --- |
 | Session and delegation | Trusted application runtime, identity stores, task delegation manager and verified identifiers | Human task text, natural-language claims about identity and authority, model suggestions about scope |
+| Inference exchange | Trusted runtime and model adapter, with explicit backend configuration and approved synthetic inputs | Local or hosted model responses, including proposed operations |
 | Model to application | Gateway, validator, tool registry, policy engine and policy store | Raw LLM-generated tool requests and final model text |
 | Executor to resources | Private tool executor, the resource catalogue, scoped storage interface and sandbox integrity | Document and email contents and external tool results represented by controlled fixtures |
 | Application to evaluation | Audit logger, fixture manifests and evaluator's independent observations | Any content derived from model output or sources, even when carried in a trusted event stream |
 
-The Human and Agent Identity Stores, Policy Store, Trusted Runtime, Task Delegation Manager, Authorisation Gateway and Tool Executor form part of the trusted computing base. The model process cannot call the executor or read the private stores or resource handles. The runtime may deliver selected, authorised tool results as untrusted input. System A and B share the same execution boundary while applying broader policies. [Trust boundary diagram](system-design.md#trust-boundaries)
+The Human and Agent Identity Stores, Policy Store, Trusted Runtime, Model Adapter, Task Delegation Manager, Authorisation Gateway and Tool Executor form part of the trusted computing base. The model backend cannot call the executor or read the private stores or resource handles. The runtime may deliver selected, authorised tool results as untrusted input. Systems A and B share the same execution boundary while applying broader policies. [Trust boundary diagram](system-design.md#trust-boundaries)
 
 ## Assumptions
 
@@ -54,7 +55,7 @@ The Human and Agent Identity Stores, Policy Store, Trusted Runtime, Task Delegat
 - Tool implementations and runtime-owned metadata are trusted. An attacker may influence their returned content through synthetic inputs.
 - Trusted configuration selects the policy mode, grants, fixture records and runtime context. The LLM may follow malicious instructions and can propose any model-visible tool call.
 - Identity spoofing in this study means model-generated or natural-language claims and attempted payload overrides. Successful compromise of authentication falls outside the study.
-- The lab uses a local model or stub and local resources. Simulated send writes only to the outbox. The model receives only permitted tool results and has no direct network or filesystem tool.
+- Enterprise resources and simulated actions stay local and isolated. Simulated send writes only to the outbox. The configured adapter can use a local model or an explicitly enabled hosted model under the synthetic-only data-handling rules. The model receives only approved synthetic inputs and permitted synthetic results and has no direct execution, network or filesystem tool. [Model adapter](system-design.md#model-adapter)
 
 ## Out of scope
 
