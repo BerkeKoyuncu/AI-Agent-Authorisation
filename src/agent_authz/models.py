@@ -6,7 +6,11 @@ from enum import StrEnum
 
 class Action(StrEnum):
     READ = "read"
+    SEARCH = "search"
     CREATE = "create"
+    EDIT = "edit"
+    DELETE = "delete"
+    SEND = "send"
 
 
 @dataclass(frozen=True)
