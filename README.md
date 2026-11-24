@@ -12,7 +12,8 @@ The proposed gateway evaluates each requested action independently of the LLM. I
 
 - **Phase 1 implemented.** Immutable records model synthetic identities, permissions, delegation and requests. A deterministic policy function checks identity/task binding and the intersection of exact action-resource grants. The demo reports decisions and the unit suite checks representative cases.
 - **Phase 2 design complete.** The architecture, threat model, access-control fixtures and evaluation protocol define the planned prototype.
-- **Phase 3 implemented.** A resettable in-memory sandbox provides a fixed synthetic catalogue and seven trusted document and simulated mail handlers. Identity and delegation management, the gateway, model integration, audit logging and experiments remain planned.
+- **Phase 3 implemented.** A resettable in-memory sandbox provides a fixed synthetic catalogue and seven trusted document and simulated mail handlers.
+- **Phase 4 implemented.** Trusted synthetic identities, authenticated sessions, agent assignment and task delegation are available. The gateway, model integration, audit logging and experiments remain planned.
 
 ## Design documentation
 
@@ -21,6 +22,7 @@ The proposed gateway evaluates each requested action independently of the LLM. I
 - [Access-control model](docs/access-control.md)
 - [Experimental design](docs/experimental-design.md)
 - [Sandbox implementation](docs/sandbox-design.md)
+- [Identity and delegation implementation](docs/identity-delegation-design.md)
 - [Development roadmap](docs/roadmap.md)
 - [Phase 1 design notes](docs/design-notes.md)
 
@@ -39,14 +41,15 @@ macOS/Linux: `source .venv/bin/activate`
 python -m pip install -e ".[dev]"
 python -m agent_authz.demo
 python -m agent_authz.sandbox.demo
+python -m agent_authz.identity.demo
 python -m pytest -q
 ```
 
-The Phase 1 demo uses a synthetic trusted context and prints an allowed meeting-note read and a denied out-of-task salary read. The Phase 3 demo directly invokes trusted sandbox handlers and shows the resulting synthetic state changes. Authorisation and tool execution are separate at this stage.
+The Phase 1 demo uses a synthetic trusted context and prints an allowed meeting-note read and a denied out-of-task salary read. The Phase 3 demo directly invokes sandbox handlers. The Phase 4 demo binds a trusted run to an active delegation, then revokes the delegation and checks the shared session separately.
 
 ## Development sequence
 
-Foundation, design and the sandbox are complete. The remaining phases cover identity and delegation, the gateway, provider-independent LLM integration, synthetic scenarios, audit logging and security testing, experimental evaluation, then the demo and final report. The next implementation phase is [identity and delegation](docs/roadmap.md#core-phases).
+The first four phases are complete. The next implementation phase is the authorisation gateway, followed by provider-independent LLM integration, synthetic scenarios, audit logging and security testing, experimental evaluation, then the demo and final report. [Development roadmap](docs/roadmap.md#core-phases)
 
 ## Scope and safety
 
