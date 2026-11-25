@@ -6,14 +6,15 @@ This research prototype studies tool-use authorisation for AI agents that may fo
 
 **Research question.** Does independent, identity- and task-scoped authorisation reduce unauthorised tool effects under prompt injection, compared with broad static permissions and a fixed tool allowlist, while preserving legitimate task completion?
 
-The proposed gateway evaluates each requested action independently of the LLM. It uses the authenticated human and assigned agent supplied by the trusted runtime and the active task's delegated scope.
+The gateway evaluates each requested action independently of any model. Under the scoped policy it uses the authenticated human, assigned agent and active task authority supplied by the trusted runtime.
 
 ## Current status
 
 - **Phase 1 implemented.** Immutable records model synthetic identities, permissions, delegation and requests. A deterministic policy function checks identity/task binding and the intersection of exact action-resource grants. The demo reports decisions and the unit suite checks representative cases.
 - **Phase 2 design complete.** The architecture, threat model, access-control fixtures and evaluation protocol define the planned prototype.
 - **Phase 3 implemented.** A resettable in-memory sandbox provides a fixed synthetic catalogue and seven trusted document and simulated mail handlers.
-- **Phase 4 implemented.** Trusted synthetic identities, authenticated sessions, agent assignment and task delegation are available. The gateway, model integration, audit logging and experiments remain planned.
+- **Phase 4 implemented.** Trusted synthetic identities, authenticated sessions, agent assignment and task delegation are available.
+- **Phase 5 implemented.** The gateway validates and mediates seven sandbox tools under the three comparison policies, with final admission checks and a local audit journal. Model integration, broader audit analysis and experiments remain planned.
 
 ## Design documentation
 
@@ -23,6 +24,7 @@ The proposed gateway evaluates each requested action independently of the LLM. I
 - [Experimental design](docs/experimental-design.md)
 - [Sandbox implementation](docs/sandbox-design.md)
 - [Identity and delegation implementation](docs/identity-delegation-design.md)
+- [Authorisation gateway implementation](docs/gateway-design.md)
 - [Development roadmap](docs/roadmap.md)
 - [Phase 1 design notes](docs/design-notes.md)
 
@@ -42,14 +44,15 @@ python -m pip install -e ".[dev]"
 python -m agent_authz.demo
 python -m agent_authz.sandbox.demo
 python -m agent_authz.identity.demo
+python -m agent_authz.gateway.demo
 python -m pytest -q
 ```
 
-The Phase 1 demo uses a synthetic trusted context and prints an allowed meeting-note read and a denied out-of-task salary read. The Phase 3 demo directly invokes sandbox handlers. The Phase 4 demo binds a trusted run to an active delegation, then revokes the delegation and checks the shared session separately.
+The Phase 1 demo prints preliminary authorisation decisions. The Phase 3 demo directly invokes sandbox handlers. The Phase 4 demo binds and revokes task authority. The Phase 5 demo compares admission and execution under all three policies using separate synthetic sandboxes.
 
 ## Development sequence
 
-The first four phases are complete. The next implementation phase is the authorisation gateway, followed by provider-independent LLM integration, synthetic scenarios, audit logging and security testing, experimental evaluation, then the demo and final report. [Development roadmap](docs/roadmap.md#core-phases)
+The first five phases are complete. The next phase is provider-independent LLM integration, followed by synthetic scenarios, broader audit logging and security testing, experimental evaluation, then the demo and final report. [Development roadmap](docs/roadmap.md#core-phases)
 
 ## Scope and safety
 

@@ -1,5 +1,7 @@
 # System design
 
+The component status descriptions below record the Phase 2 baseline. For the current implementation and enforcement guarantees, see the [Phase 5 gateway design](gateway-design.md).
+
 The proposed prototype tests whether independent authorisation limits what a tool-using agent can do after prompt injection. The model submits untrusted requests. A trusted local application supplies the identities and active delegation, and the gateway controls every tool invocation. Synthetic resources and simulated actions stay local and isolated. A provider-independent adapter supplies model responses. The [threat model](threat-model.md), [access-control model](access-control.md) and [experimental design](experimental-design.md) define the security claims, fixture grants and comparisons.
 
 ## Phase 1 review

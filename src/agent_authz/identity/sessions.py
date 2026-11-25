@@ -145,11 +145,15 @@ class SessionManager:
         self._runs[run_id] = run
         return run
 
-    def validate_run(self, run: RunBinding) -> datetime:
-        """Check the registered shared binding and return its validation time."""
+    def require_registered_run(self, run: RunBinding) -> None:
+        """Check provenance only, for safe audit correlation without granting access."""
         if (type(run) is not RunBinding or type(run.run_id) is not str
                 or self._runs.get(run.run_id) is not run):
             raise AuthorityError(ErrorCode.BINDING_MISMATCH)
+
+    def validate_run(self, run: RunBinding) -> datetime:
+        """Check the registered shared binding and return its validation time."""
+        self.require_registered_run(run)
         now = self.now()
         session = self._require_session(run.session_id, now)
         if session.human_id != run.human_id:
