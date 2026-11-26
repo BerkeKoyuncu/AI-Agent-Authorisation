@@ -4,14 +4,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_authz.audit.completeness import Issue, Status, assess_journal
+from agent_authz.audit.observations import AttemptObservation, BindingObservation, OperationObservation, OutcomeObservation
+from agent_authz.audit.reader import read_journal
 from agent_authz.delegation import DelegationStatus
 from agent_authz.gateway import Execution, Gateway, PolicyMode
 from agent_authz.gateway import service
 from agent_authz.gateway.audit import JsonlAudit
 from agent_authz.gateway.executor import _Executor
-from agent_authz.gateway.models import Reason
+from agent_authz.gateway.models import Reason, RecordVersions
 from agent_authz.gateway.policies import evaluate
-from agent_authz.gateway.registry import canonicalise
+from agent_authz.gateway.registry import ValidationError, canonicalise
 from agent_authz.identity.principals import PrincipalKind
 from agent_authz.models import Action
 from agent_authz.sandbox import Fixture, SandboxEnvironment
@@ -494,3 +497,162 @@ def test_timing_boundaries_separate_audit_policy_and_execution(lab, monkeypatch)
     assert (timing.policy_ns, timing.enforcement_ns, timing.executor_ns, timing.gateway_overhead_ns) == (8, 70, 7, 109)
     assert len(timing.audit_writes_ns) == 7
     assert all(duration == 13 for _, duration in timing.audit_writes_ns)
+
+
+def observe_audit_call(case, runtime, raw, *, registered=True, mode=PolicyMode.C):
+    run, context = case.run, case.context
+    binding = BindingObservation(run.run_id, run.session_id, run.human_id, run.agent_id,
+                                 context.task_id, context.delegation_id) if registered else None
+    try:
+        operation = OperationObservation.from_invocation(canonicalise(raw))
+    except ValidationError:
+        operation = None
+
+    def versions():
+        return RecordVersions(
+            runtime.identities.lookup(PrincipalKind.HUMAN, run.human_id).version,
+            runtime.identities.lookup(PrincipalKind.AGENT, run.agent_id).version,
+            runtime.delegations.lookup(context.delegation_id).version,
+        )
+
+    before = versions() if registered else None
+    result = case.call(raw) if registered else case.gateway.handle(raw, replace(run), context)
+    return result, AttemptObservation(
+        run.run_id if registered else None, 1, mode, result.request_id, binding, operation is not None,
+        operation, OutcomeObservation.from_result(result), before, versions() if registered else None,
+    )
+
+
+@pytest.mark.parametrize(("rejection", "sequence"), [
+    ("structure", ("attempt", "validation", "admission")),
+    ("policy", ("attempt", "validation", "preliminary", "admission")),
+    ("binding", ("attempt", "validation", "preliminary", "admission")),
+])
+def test_persisted_rejection_paths_have_no_effect_or_fabricated_binding(lab, runtime, tmp_path, rejection, sequence):
+    path = tmp_path / "journal.jsonl"
+    case = lab(PolicyMode.C, audit_hook=JsonlAudit(path))
+    raw = {"fixture_marker": "neutral malformed value"} if rejection == "structure" else request(
+        "read_document", "public_report.txt"
+    )
+    before = case.sandbox.snapshot()
+    result, observed = observe_audit_call(case, runtime, raw, registered=rejection != "binding")
+    audit = assess_journal(read_journal(path), [observed])
+    assert audit.globally_clean and audit.attempts[0].required_events == sequence
+    assert not result.dispatched and not case.invocations and case.sandbox.snapshot() == before
+    assert result.model_response() == {"status": "denied"} and result.data is None
+    if rejection == "structure":
+        assert all("tool" not in row.fields for row in audit.journal.records)
+    if rejection == "binding":
+        assert all("run_id" not in row.fields and "session_id" not in row.fields for row in audit.journal.records)
+    contradictory = assess_journal(audit.journal, [replace(observed, effect="observed_success")])
+    assert contradictory.attempts[0].status is Status.INCONSISTENT
+    assert Issue.EFFECT_CONFLICT.value in contradictory.issue_counts
+
+
+@pytest.mark.parametrize("trigger", ["preliminary", "dispatch_intent"])
+def test_persisted_late_denial_accepts_legitimate_version_change(lab, runtime, tmp_path, trigger):
+    path = tmp_path / "journal.jsonl"
+    write = JsonlAudit(path)
+
+    def audit_hook(event):
+        write(event)
+        if event["event"] == trigger:
+            runtime.delegations.revoke(case.context.delegation_id)
+
+    case = lab(PolicyMode.C, audit_hook=audit_hook)
+    result, observed = observe_audit_call(case, runtime, MEETING)
+    assert not result.dispatched and not case.invocations
+    assert result.decision.reason is Reason.DELEGATION_REVOKED
+    runtime.sessions.validate_run(case.run)
+    audit = assess_journal(read_journal(path), [observed])
+    assert audit.globally_clean
+    records = audit.attempts[0].records
+    assert ("dispatch_intent" in [row.event for row in records]) is (trigger == "dispatch_intent")
+    assert records[2].fields["delegation_version"] < records[-1].fields["delegation_version"]
+
+
+@pytest.mark.parametrize("stage", ["attempt", "validation", "preliminary", "dispatch_intent"])
+def test_persisted_pre_dispatch_fault_cannot_execute(lab, runtime, tmp_path, stage):
+    path = tmp_path / "journal.jsonl"
+    write = JsonlAudit(path)
+
+    def audit_hook(event):
+        if event["event"] == stage:
+            raise OSError("private test exception")
+        write(event)
+
+    case = lab(PolicyMode.C, audit_hook=audit_hook)
+    before = case.sandbox.snapshot()
+    result, observation = observe_audit_call(case, runtime, MEETING)
+    assert result.decision.reason is Reason.AUDIT_UNAVAILABLE and not result.dispatched
+    assert not case.invocations and case.sandbox.snapshot() == before
+    audit = assess_journal(read_journal(path), [observation])
+    assert audit.attempts[0].status is Status.INCOMPLETE
+    assert audit.issue_counts == {"unconfirmed_write": 1, "missing_event": 1}
+    assert audit.journal.records[-1].event == "admission"
+
+
+@pytest.mark.parametrize("write_before_failure", [False, True])
+def test_post_dispatch_failure_preserves_effect_and_unconfirmed_persistence(lab, runtime, tmp_path, write_before_failure):
+    path = tmp_path / "journal.jsonl"
+    write = JsonlAudit(path)
+
+    def audit_hook(event):
+        if event["event"] == "outcome":
+            if write_before_failure:
+                write(event)
+            raise OSError("private persistence marker")
+        write(event)
+
+    case = lab(PolicyMode.C, "T4", audit_hook=audit_hook)
+    result, observation = observe_audit_call(case, runtime, send())
+    assert result.execution is Execution.SUCCEEDED and len(case.sandbox.snapshot().outbox) == 1
+    audit = assess_journal(read_journal(path), [observation])
+    assert audit.attempts[0].status is Status.INCOMPLETE
+    assert audit.issue_counts[Issue.UNCONFIRMED_WRITE.value] == 1
+    assert (Issue.MISSING_EVENT.value in audit.issue_counts) is not write_before_failure
+    assert "private persistence marker" not in path.read_text(encoding="utf-8") + repr(audit.issue_counts)
+
+
+@pytest.mark.parametrize(("failure", "execution", "lifecycle"), [
+    (SandboxError(ErrorCode.INVALID_ARGUMENT), Execution.FAILED, "failure_no_effect"),
+    (RuntimeError("private executor sentinel"), Execution.UNKNOWN, "quarantined"),
+])
+def test_complete_audit_can_describe_failed_or_uncertain_execution(lab, runtime, tmp_path, failure, execution, lifecycle):
+    path = tmp_path / "journal.jsonl"
+
+    def handler(invocation, execute):
+        raise failure
+
+    case = lab(PolicyMode.C, "T4", audit_hook=JsonlAudit(path), executor_hook=handler)
+    result, observation = observe_audit_call(case, runtime, send())
+    assert result.dispatched and result.execution is execution and result.lifecycle == lifecycle
+    audit = assess_journal(read_journal(path), [observation])
+    assert audit.globally_clean and audit.attempts[0].observation.effect is None
+    assert "private executor sentinel" not in path.read_text(encoding="utf-8")
+
+
+def test_versioned_journal_and_diagnostics_exclude_synthetic_content_and_credentials(lab, runtime, tmp_path):
+    path = tmp_path / "journal.jsonl"
+    write = JsonlAudit(path)
+    query, document = "query sentinel", "document sentinel"
+    subject, body, malformed = "subject sentinel", "body sentinel", "malformed sentinel"
+    replacement = "replacement sentinel"
+    reader = lab(PolicyMode.C, "T6", audit_hook=write)
+    reader.sandbox.edit_document("meeting_notes.txt", f"{query} {document}")
+    assert reader.call(request("search_documents", "meeting_notes.txt", query=query)).data
+    editor = lab(PolicyMode.C, "T3", audit_hook=write)
+    assert editor.call(request("create_document", "summary.txt", content=replacement)).execution is Execution.SUCCEEDED
+    sender = lab(PolicyMode.C, "T4", audit_hook=write)
+    assert sender.call(request("send_simulated_email", "email_outbox", destination=TEAM,
+                               subject=subject, body=body)).dispatched
+    rejected = sender.call({"fixture_content": malformed, "bearer": sender.token})
+    assert not rejected.dispatched and rejected.model_response() == {"status": "denied"}
+    raw_text = path.read_text(encoding="utf-8")
+    journal = read_journal(path)
+    assert not journal.problems and all(row.fields["schema_version"] == 1 for row in journal.records)
+    assert all(value not in raw_text + repr(journal.problems)
+               for value in (query, document, subject, body, malformed, replacement))
+    # The clock fixture numbers IDs, so one complete ID can prefix another.
+    assert all(json.dumps(value) not in raw_text for actor in (reader, editor, sender) for value in (actor.token, actor.proof))
+    assert any(row.fields.get("destination") == TEAM for row in journal.records)

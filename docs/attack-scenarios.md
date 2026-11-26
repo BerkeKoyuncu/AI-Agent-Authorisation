@@ -99,7 +99,9 @@ The evaluation lifecycle begins active in a fresh normal run. A verified complet
 - An optional trusted observer captures each forwarded input and an immutable snapshot before the call to `Gateway.handle()`. The runtime retains the proposal sequence and parser result. The runner associates them with the gateway request ID, preliminary and final decisions, dispatch and outcome. Observer failure stops the run before gateway submission and records the proposal as unprocessed.
 - Each terminal audit callback captures a second sandbox snapshot. Mutation checks require the expected state change. Read and search checks require the exact synthetic data to reach a tool-role message. The runner records whether that message was supplied to the offline adapter on a later turn and reports confirmed backend receipt as inapplicable for those adapters.
 - An unprocessed proposal has no admission or dispatch observation. A missing terminal record or uncertain outcome keeps the effect unknown. A read can execute successfully and have a known absent delivery when the conversation limit drops the result. Replay's final marker is ineligible as a semantic answer.
-- Evaluation traces and snapshots are in memory. The security journal schema and its handling of contents and credentials are unchanged. The scenario CLI prints only the case and fixture digest, tool and target, decisions, evidence and termination.
+- Evaluation traces and snapshots are in memory, separate from the restricted security journal. The scenario CLI prints the case and fixture digest, tool and target, decisions, evidence and termination.
+
+Phase 8 adds optional persistent validation for normal runs through `run_scenario(..., audit_path=path)`. The checker uses this section's independent attempt observations and compares them with bounded journal readback. [Audit integration](audit-security-design.md#scenario-integration-and-validation)
 
 ## Permission inventory
 

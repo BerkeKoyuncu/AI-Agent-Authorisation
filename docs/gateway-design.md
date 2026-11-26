@@ -84,6 +84,8 @@ For C, successful designated create, send or delete closes T3, T4 or T5 respecti
 
 The journal records timestamps, trusted identifiers from registered bindings, mode and policy version, applicable record versions and event-specific reasons. Only canonical tool, action, resource and registered destination values are copied from validated requests. Registered destinations rejected by policy can still be logged. Malformed values are represented by safe validation statuses and omitted fields. Proofs, bearer tokens, document text, prompts, queries, subjects, bodies and exception messages stay out of the journal.
 
+Phase 8 stamps audit schema version 1 and validates the field allowlist before persistence. The bounded reader compares journal rows with independently captured attempts and trusted results. [Audit schema and completeness rules](audit-security-design.md)
+
 A failed required pre-dispatch write denies entry, and the gateway attempts to record the denial. `failed_audit_events` identifies unconfirmed writes. A failed post-dispatch write leaves the actual execution outcome and lifecycle effect intact. The append and flush protocol provides per-event persistence confirmation through the OS. It provides no atomic transaction spanning the journal and sandbox, recovery replay or tamper protection. Trusted callers keep the destination in a controlled directory.
 
 | Measure | Monotonic interval in nanoseconds |

@@ -6,6 +6,7 @@ from itertools import count
 from threading import get_ident
 from time import monotonic_ns
 
+from ..audit import AUDIT_SCHEMA_VERSION
 from ..delegation import DelegationManager, DelegationRecord, RuntimeExecutionContext
 from ..identity.errors import AuthorityError, ErrorCode as AuthorityCode
 from ..identity.principals import PrincipalKind
@@ -87,7 +88,7 @@ class Gateway:
 
     def _record(self, attempt: _Attempt, event: str, **fields: object) -> bool:
         record = {
-            **attempt.fields, "event": event, "timestamp": utc_now().isoformat(),
+            **attempt.fields, "schema_version": AUDIT_SCHEMA_VERSION, "event": event, "timestamp": utc_now().isoformat(),
             "request_id": attempt.request_id, "policy_mode": self._mode, "policy_version": POLICY_VERSION,
             "policy_ns": attempt.policy_ns, "enforcement_ns": attempt.enforcement_ns,
             "executor_ns": attempt.executor_ns, "prior_audit_writes_ns": tuple(attempt.audit_writes), **fields,
