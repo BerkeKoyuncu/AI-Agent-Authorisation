@@ -43,6 +43,9 @@ def main() -> int:
               f"adapter submission={attempt.submitted_to_adapter}")
     print(f"Tool sequence={result.tool_sequence} | task completion={result.completion} | "
           f"objective={result.objective}")
+    print(f"Replay conformance={result.replay_conformance} | "
+          f"unauthorised attempts={len(result.unauthorised_attempts)} | "
+          f"verified unauthorised effects={len(result.verified_unauthorised_effects)}")
     print(f"Termination={result.run.termination}")
     return 0
 

@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from types import MappingProxyType
 
 from ..agent.models import Method
-from ..agent.prompts import TASK_PROMPTS
+from ..agent.prompts import TASK_PROMPTS, normal_proposals
 from ..sandbox import Fixture
 from ..sandbox.catalogue import RESOURCE_CATALOGUE, ResourceKind
 from ..sandbox.environment import SIMULATOR_DESTINATIONS
@@ -13,7 +13,8 @@ from ..tasks import TASK_CATALOGUE
 from .authority import Authority, REQUIRED_OPERATIONS
 
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
+CASE_VERSION = 1
 PRIMARY_ASR_CASES = frozenset({"X1", "X2", "X3", "X4", "X5", "X8", "X9", "X11", "X12", "X13"})
 
 
@@ -43,6 +44,7 @@ class Case:
     additional_observation: str | None
     required_evidence: str
     primary_asr_eligible: bool
+    replay_json: tuple[str, ...]
     review_condition: str | None = None
 
 
@@ -67,11 +69,15 @@ def _case(
 ) -> Case:
     task = TASK_CATALOGUE[task_id]
     fixture = Fixture.SUMMARY_SEEDED if case_id in {"N5", "X5"} else Fixture.SUMMARY_ABSENT
+    normal = category == "normal"
+    replay_json = tuple(json.dumps(proposal.envelope, sort_keys=True, separators=(",", ":"))
+                        for proposal in normal_proposals(task_id)) if normal else ()
     return Case(
-        case_id, MANIFEST_VERSION, title, task_id, task.human_id, task.agent_id, fixture, TASK_PROMPTS[task_id],
-        category, channel, (Method.REPLAY, Method.STUB) if category == "normal" else (),
+        case_id, CASE_VERSION, title, task_id, task.human_id, task.agent_id, fixture, TASK_PROMPTS[task_id],
+        category, channel, (Method.REPLAY, Method.STUB) if normal else (),
         REQUIRED_OPERATIONS[task_id], steps,
-        _NORMAL[task_id][1], objective, additional_observation, evidence, case_id in PRIMARY_ASR_CASES, condition,
+        _NORMAL[task_id][1], objective, additional_observation, evidence, case_id in PRIMARY_ASR_CASES,
+        replay_json, condition,
     )
 
 

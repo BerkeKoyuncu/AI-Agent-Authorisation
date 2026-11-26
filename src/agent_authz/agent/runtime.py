@@ -6,10 +6,10 @@ from dataclasses import asdict, dataclass
 import json
 from time import monotonic_ns
 
-from ..delegation import DelegationManager, RuntimeExecutionContext
+from ..delegation import DelegationManager, DelegationRecord, RuntimeExecutionContext
 from ..gateway import Execution, Gateway, PolicyMode, tool_schemas
 from ..identity.errors import AuthorityError
-from ..identity.principals import IdentityStore
+from ..identity.principals import IdentityStore, Principal, PrincipalKind
 from ..identity.sessions import RunBinding, SessionManager
 from ..sandbox import Fixture, SandboxEnvironment
 from ..tasks import TASK_CATALOGUE
@@ -226,9 +226,21 @@ class AgentRuntime:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthoritySnapshot:
+    """Credential-free observation of the trusted records attached to a task."""
+
+    context: RuntimeExecutionContext
+    shared_valid: bool
+    human: Principal
+    agent: Principal
+    delegation: DelegationRecord | None
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedTask:
     runtime: AgentRuntime
     sandbox: SandboxEnvironment
+    observe_authority: Callable[[], AuthoritySnapshot]
 
 
 def prepare_task(
@@ -250,4 +262,22 @@ def prepare_task(
     fixture = Fixture.SUMMARY_SEEDED if task_id == "T5" else Fixture.SUMMARY_ABSENT
     sandbox = SandboxEnvironment(fixture)
     gateway = Gateway(policy, sessions, delegations, sandbox, audit)
-    return PreparedTask(AgentRuntime(task_id, sessions, gateway, run, context, limits=limits, settings=settings), sandbox)
+
+    def observe_authority() -> AuthoritySnapshot:
+        try:
+            sessions.validate_run(run)
+        except AuthorityError:
+            shared_valid = False
+        else:
+            shared_valid = True
+        try:
+            delegation = delegations.lookup(context.delegation_id)
+        except AuthorityError:
+            delegation = None
+        return AuthoritySnapshot(
+            context, shared_valid, sessions.identities.lookup(PrincipalKind.HUMAN, run.human_id),
+            sessions.identities.lookup(PrincipalKind.AGENT, run.agent_id), delegation,
+        )
+
+    runtime = AgentRuntime(task_id, sessions, gateway, run, context, limits=limits, settings=settings)
+    return PreparedTask(runtime, sandbox, observe_authority)

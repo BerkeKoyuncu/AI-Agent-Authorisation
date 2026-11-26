@@ -16,7 +16,7 @@ The gateway evaluates each requested action independently of any model. Under th
 - **Phase 4 implemented.** Trusted synthetic identities, authenticated sessions, agent assignment and task delegation are available.
 - **Phase 5 implemented.** The gateway validates and mediates seven sandbox tools under the three comparison policies, with final admission checks and a local audit journal.
 - **Phase 6 implemented.** The provider-independent conversation loop supports deterministic replay, a scripted stub and opt-in local Ollama. The local adapter has offline protocol tests. Live inference remains unverified.
-- **Phase 7 partially implemented.** A versioned catalogue records the 20 approved case specifications. The normal-case runner independently checks task authority, effects and completion for six tasks under all three policies. The fourteen X cases are review specifications.
+- **Phase 7 partially implemented.** A versioned catalogue records the 20 approved case specifications. The normal-case runner checks the frozen replay, trusted binding, effects and completion for six tasks under all three policies. The fourteen X cases have read-only objective predicates for reviewing evidence.
 
 ## Design documentation
 
