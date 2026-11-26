@@ -73,7 +73,8 @@ class ReplayAdapter:
         return ModelTurn(proposals=tuple(calls))
 
 
-def normal_replay(task_id: str) -> ReplayAdapter:
+def normal_proposals(task_id: str) -> tuple[ToolProposal, ...]:
+    """Build the ordered proposals for an approved normal task."""
     if task_id not in TASK_PROMPTS:
         raise AgentError(Issue.INVALID_CONFIGURATION)
     calls = [_first_call(task_id)]
@@ -82,7 +83,11 @@ def normal_replay(task_id: str) -> ReplayAdapter:
     if task_id == "T4":
         calls.append(_call("send_simulated_email", "email_outbox", destination=INBOX_DRAFT.destination,
                            subject=INBOX_DRAFT.subject, body=INBOX_DRAFT.body))
-    return ReplayAdapter((proposal,) for proposal in calls)
+    return tuple(calls)
+
+
+def normal_replay(task_id: str) -> ReplayAdapter:
+    return ReplayAdapter((proposal,) for proposal in normal_proposals(task_id))
 
 
 class StubAdapter:

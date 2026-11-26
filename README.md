@@ -15,7 +15,8 @@ The gateway evaluates each requested action independently of any model. Under th
 - **Phase 3 implemented.** A resettable in-memory sandbox provides a fixed synthetic catalogue and seven trusted document and simulated mail handlers.
 - **Phase 4 implemented.** Trusted synthetic identities, authenticated sessions, agent assignment and task delegation are available.
 - **Phase 5 implemented.** The gateway validates and mediates seven sandbox tools under the three comparison policies, with final admission checks and a local audit journal.
-- **Phase 6 implemented.** The provider-independent conversation loop supports deterministic replay, a scripted stub and opt-in local Ollama. The local adapter has offline protocol tests. Live inference remains unverified. Scenario development and experimental evaluation remain planned.
+- **Phase 6 implemented.** The provider-independent conversation loop supports deterministic replay, a scripted stub and opt-in local Ollama. The local adapter has offline protocol tests. Live inference remains unverified.
+- **Phase 7 revised control-validation scope complete.** The six normal cases run under all three policies with replay and stub. The 20-case evidence matrix links gateway and runtime regressions and passive reviews. The 28 permission candidates have schema-only validation. All 42 X-case replay combinations remain unsupported, and live inference remains unverified. [Evidence matrix and open criteria](docs/attack-scenarios.md#case-to-evidence-traceability)
 
 ## Design documentation
 
@@ -27,6 +28,7 @@ The gateway evaluates each requested action independently of any model. Under th
 - [Identity and delegation implementation](docs/identity-delegation-design.md)
 - [Authorisation gateway implementation](docs/gateway-design.md)
 - [Model adapter and runtime implementation](docs/llm-integration-design.md)
+- [Scenario specifications and control validation](docs/attack-scenarios.md)
 - [Development roadmap](docs/roadmap.md)
 - [Phase 1 design notes](docs/design-notes.md)
 
@@ -48,6 +50,7 @@ python -m agent_authz.sandbox.demo
 python -m agent_authz.identity.demo
 python -m agent_authz.gateway.demo
 python -m agent_authz.agent.demo
+python -m agent_authz.scenarios.demo
 python -m pytest -q
 ```
 
@@ -55,9 +58,11 @@ The Phase 1 demo prints preliminary authorisation decisions. The Phase 3 demo di
 
 The Phase 6 demo defaults to the offline stub. Use `python -m agent_authz.agent.demo --backend replay --policy C --task T1` for deterministic replay. For an already installed local tool-capable Ollama model on a server with cloud features disabled, use `python -m agent_authz.agent.demo --backend ollama --model MODEL_NAME --confirm-local-only --policy C --task T1`. Replace `MODEL_NAME` with the installed tag. [Local backend setup and smoke-test criteria](docs/llm-integration-design.md#local-ollama-backend)
 
+Use `python -m agent_authz.scenarios.demo --list` to see the catalogue and `python -m agent_authz.scenarios.demo --case N4 --policy C --backend stub` to see a normal case with independent evidence.
+
 ## Development sequence
 
-The next phase is synthetic scenario development, followed by broader audit logging and security testing, experimental evaluation, then the demo and final report. [Development roadmap](docs/roadmap.md#core-phases)
+The roadmap tracks the remaining scenario work, broader audit logging and security testing, experimental evaluation, and the final demonstration and report. [Development roadmap](docs/roadmap.md#core-phases)
 
 ## Scope and safety
 
