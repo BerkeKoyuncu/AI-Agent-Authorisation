@@ -10,6 +10,7 @@ from agent_authz.delegation import DelegationStatus
 from agent_authz.gateway import Execution, PolicyMode
 from agent_authz.gateway.registry import TOOL_REGISTRY, canonicalise
 from agent_authz.sandbox.catalogue import RESOURCE_CATALOGUE
+from agent_authz.sandbox.fixtures import AGENDA_QUERY, INBOX_DRAFT
 from agent_authz.scenarios import runner
 from agent_authz.scenarios.authority import Authority, Evidence, Label, Lifecycle
 from agent_authz.scenarios.catalogue import CASES, PERMISSION_INVENTORY
@@ -32,12 +33,28 @@ def test_normal_replays_freeze_and_execute_the_exact_manifest_requests():
         assert [attempt.gateway_input_json for attempt in result.attempts] == list(case.replay_json)
 
 
-def test_permission_slots_map_to_shared_registry_without_dispatching():
-    for slot in PERMISSION_INVENTORY:
-        kind = RESOURCE_CATALOGUE[slot.resource_id].kind
-        specs = [spec for spec in TOOL_REGISTRY.values() if spec.kind is kind and spec.action == slot.action]
-        assert len(specs) == 1
-        assert ("destination" in {arg.name for arg in specs[0].arguments}) == (slot.destination is not None)
+@pytest.mark.parametrize("slot", PERMISSION_INVENTORY, ids=[
+    f"{slot.action}-{slot.resource_id}" + (f"-{slot.destination}" if slot.destination else "")
+    for slot in PERMISSION_INVENTORY
+])
+def test_permission_candidate_is_canonicalised_without_dispatching(slot):
+    kind = RESOURCE_CATALOGUE[slot.resource_id].kind
+    matches = [(tool, spec) for tool, spec in TOOL_REGISTRY.items()
+               if spec.kind is kind and spec.action == slot.action]
+    (tool, spec), = matches
+    assert ("destination" in {arg.name for arg in spec.arguments}) == (slot.destination is not None)
+
+    arguments = {"resource_id": slot.resource_id}
+    if slot.action == "search":
+        arguments["query"] = AGENDA_QUERY if slot.resource_id == "meeting_notes.txt" else "synthetic"
+    elif slot.action in {"create", "edit"}:
+        arguments["content"] = "Synthetic schema validation text."
+    elif slot.action == "send":
+        arguments.update(destination=slot.destination, subject=INBOX_DRAFT.subject, body=INBOX_DRAFT.body)
+
+    candidate = canonicalise({"tool": tool, "arguments": arguments})
+    assert (candidate.tool, candidate.action, candidate.resource_id) == (tool, slot.action, slot.resource_id)
+    assert dict(candidate.arguments) == arguments
 
 
 def test_completion_and_conformance_are_independent_of_an_extra_denial():

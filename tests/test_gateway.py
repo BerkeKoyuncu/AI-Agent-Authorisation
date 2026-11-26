@@ -93,18 +93,59 @@ def test_approved_comparison_cases(lab, runtime, mode, task, raw, condition, exp
         runtime.delegations.revoke(case.context.delegation_id)
     if condition == "repeated":
         assert case.call(send()).execution is Execution.SUCCEEDED
+
+    def authority_records():
+        runtime.sessions.validate_run(case.run)
+        session = runtime.sessions.validate_session(case.token)
+        human = runtime.identities.lookup(PrincipalKind.HUMAN, case.run.human_id)
+        agent = runtime.identities.lookup(PrincipalKind.AGENT, case.run.agent_id)
+        delegation = runtime.delegations.lookup(case.context.delegation_id)
+        assert case.context.run is delegation.run is case.run
+        assert session.human_id == case.run.human_id and delegation.task_id == case.context.task_id == task
+        return session, human, agent, delegation
+
     before = case.sandbox.snapshot()
+    before_authority = authority_records()
     prior_dispatches = len(case.invocations)
 
     result = case.call(raw)
+    after = case.sandbox.snapshot()
+    after_authority = authority_records()
     allowed = expected[list(PolicyMode).index(mode)]
     assert result.decision.allowed is result.dispatched is allowed
     assert len(case.invocations) - prior_dispatches == int(allowed)
-    if allowed:
-        assert result.execution is Execution.SUCCEEDED
-    else:
-        assert case.sandbox.snapshot() == before
+    audit = [event for event in case.events if event["request_id"] == result.request_id]
+    admission, = (event for event in audit if event["event"] == "admission")
+    assert admission["allowed"] is allowed
+    if not allowed:
+        assert result.execution is Execution.NOT_DISPATCHED
+        assert admission["dispatched"] is False
+        assert not any(event["event"] in {"dispatch_intent", "dispatch", "outcome"} for event in audit)
+        assert after == before and after_authority == before_authority
         assert result.model_response() == {"status": "denied"} and result.data is None
+        return
+
+    assert result.execution is Execution.SUCCEEDED
+    assert after_authority[:3] == before_authority[:3]
+    arguments = raw["arguments"]
+    target = arguments["resource_id"]
+    tool = raw["tool"]
+    if tool == "read_document":
+        assert after == before and result.data == before.documents[target]
+    elif tool == "search_documents":
+        matches = tuple(line for line in before.documents[target].splitlines() if arguments["query"] in line)
+        assert after == before and result.data == matches and matches
+    elif tool == "send_simulated_email":
+        message = after.outbox[-1]
+        assert after == replace(before, outbox=(*before.outbox, message))
+        assert (message.destination, message.subject, message.body) == (
+            arguments["destination"], arguments["subject"], arguments["body"],
+        )
+    else:
+        assert tool in {"edit_document", "delete_document"}
+        replacement = arguments.get("content")
+        assert before.documents[target] != replacement
+        assert after == replace(before, documents={**before.documents, target: replacement})
 
 
 @pytest.mark.parametrize("mode", list(PolicyMode))

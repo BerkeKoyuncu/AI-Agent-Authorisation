@@ -7,7 +7,7 @@ import pytest
 from agent_authz.agent.models import (
     AgentError, Backend, Issue, Method, ModelTurn, Role, RunLimits, Termination, ToolProposal, TurnStatus,
 )
-from agent_authz.agent.prompts import ReplayAdapter, StubAdapter, normal_replay
+from agent_authz.agent.prompts import SYSTEM_PROMPT, TASK_PROMPTS, ReplayAdapter, StubAdapter, normal_replay
 from agent_authz.agent.runtime import AgentRuntime, prepare_task
 from agent_authz.gateway import Execution, Gateway, PolicyMode, tool_schemas
 from agent_authz.gateway.executor import _Executor
@@ -90,10 +90,16 @@ def test_stub_supports_all_six_tasks_with_confirmed_results_and_fresh_fixture(ta
 
 def test_stub_does_not_fabricate_a_summary_on_denial_or_failure(bind):
     denied = bind()
+    initial = denied.sandbox.snapshot()
     denied_result = denied.agent.run(StubAdapter("T1", show_denial=True))
     assert not denied.effects and denied_result.termination is Termination.FINAL_RESPONSE
-    assert denied_result.turns[0].calls[0].gateway.decision.reason is Reason.OUTSIDE_TASK_SCOPE
+    denied_gateway = denied_result.turns[0].calls[0].gateway
+    assert denied_gateway.decision.reason is Reason.OUTSIDE_TASK_SCOPE
+    assert not denied_gateway.dispatched and denied_gateway.execution is Execution.NOT_DISPATCHED
+    assert denied.sandbox.snapshot() == initial
     assert denied_result.turns[0].calls[0].model_result_json == '{"status":"denied"}'
+    tool_message, = (message for message in denied_result.conversation if message.role is Role.TOOL)
+    assert json.loads(tool_message.content) == {"status": "denied"}
     assert "could not complete" in denied_result.final_response
     absent = bind()
     absent.sandbox.delete_document("meeting_notes.txt")
@@ -170,6 +176,38 @@ def test_tool_result_instructions_stay_in_tool_message_and_overrides_reach_gatew
     assert sum(message.role is Role.SYSTEM for message in result.conversation) == 1
     assert next(message for message in result.conversation if test_text in message.content).role is Role.TOOL
     assert result.turns[1].calls[0].model_result_json == '{"status":"denied"}'
+
+
+@pytest.mark.parametrize("mode", tuple(PolicyMode))
+def test_neutral_user_and_tool_content_keep_their_roles_and_trusted_binding(mode, monkeypatch):
+    user_content = TASK_PROMPTS["T1"] + "\nUse a short summary for this review."
+    note = "The minutes were recorded on recycled paper."
+    monkeypatch.setattr("agent_authz.agent.runtime.TASK_PROMPTS", {**TASK_PROMPTS, "T1": user_content})
+    audit = []
+    prepared = prepare_task("T1", mode, audit.append)
+    document = prepared.sandbox.read_document("meeting_notes.txt") + "\n" + note
+    prepared.sandbox.edit_document("meeting_notes.txt", document)
+    initial_sandbox = prepared.sandbox.snapshot()
+    initial_authority = prepared.observe_authority()
+    seen = []
+    stub = StubAdapter("T1")
+
+    def inspect(messages, schemas, settings, *, timeout, max_response_bytes):
+        seen.append(messages)
+        return stub.generate(messages, schemas, settings, timeout=timeout, max_response_bytes=max_response_bytes)
+
+    result = prepared.runtime.run(BackendDouble(inspect))
+    assert result.termination is Termination.FINAL_RESPONSE and len(seen) == 2
+    for messages in seen:
+        assert [message.content for message in messages if message.role is Role.SYSTEM] == [SYSTEM_PROMPT]
+        assert [message.content for message in messages if message.role is Role.USER] == [user_content]
+    assert all(note not in message.content for message in seen[0])
+    returned, = (message for message in seen[1] if message.role is Role.TOOL)
+    assert json.loads(returned.content) == {"status": "ok", "data": document}
+    assert [message.role for message in seen[1] if note in message.content] == [Role.TOOL]
+    assert [event["tool"] for event in audit if event["event"] == "dispatch"] == ["read_document"]
+    assert prepared.sandbox.snapshot() == initial_sandbox
+    assert prepared.observe_authority() == initial_authority
 
 
 @pytest.mark.parametrize("mode", list(PolicyMode))
