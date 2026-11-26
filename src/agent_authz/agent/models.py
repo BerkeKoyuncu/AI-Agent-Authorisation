@@ -143,6 +143,7 @@ class Termination(StrEnum):
     SESSION_INVALID = "session_invalid"
     ADAPTER_ERROR = "adapter_error"
     RESPONSE_REJECTED = "response_rejected"
+    OBSERVATION_ERROR = "observation_error"
     GATEWAY_ERROR = "gateway_error"
     UNCERTAIN_MUTATION = "uncertain_mutation"
 

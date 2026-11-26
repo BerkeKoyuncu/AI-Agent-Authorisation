@@ -100,7 +100,10 @@ class AgentRuntime:
             return Termination.SESSION_INVALID
         return None
 
-    def run(self, adapter: ModelAdapter) -> RunResult:
+    def run(
+        self, adapter: ModelAdapter, *, observe_attempt: Callable[[int, object], None] | None = None,
+    ) -> RunResult:
+        """Run the adapter, optionally recording detached inputs before gateway submission."""
         if self._used:
             raise AgentError(Issue.INVALID_CONFIGURATION)
         self._used = True
@@ -175,7 +178,7 @@ class AgentRuntime:
                     termination = self._stop(deadline)
                     if termination is not None:
                         break
-                    observation, termination = self._forward(proposal, conversation)
+                    observation, termination = self._forward(proposal, conversation, deadline, observe_attempt)
                     attempted += 1
                     outcomes.append(observation)
                     if termination is not None:
@@ -195,9 +198,21 @@ class AgentRuntime:
                          tuple(turns), tuple(conversation.messages), final, termination or Termination.TURN_LIMIT,
                          self._clock() - started)
 
-    def _forward(self, proposal: ParsedProposal, conversation: _Conversation) -> tuple[ToolObservation, Termination | None]:
+    def _forward(
+        self, proposal: ParsedProposal, conversation: _Conversation, deadline: int,
+        observe_attempt: Callable[[int, object], None] | None,
+    ) -> tuple[ToolObservation, Termination | None]:
         fields = (proposal.call.sequence, proposal.raw_json, proposal.provider_id, proposal.provider_index, proposal.issue)
         request = json.loads(proposal.request_json) if proposal.request_json is not None else None
+        if observe_attempt is not None:
+            try:
+                observe_attempt(proposal.call.sequence, deepcopy(request))
+            except Exception:
+                stop = Termination.OBSERVATION_ERROR
+                return ToolObservation(*fields, unprocessed=stop), stop
+            stop = self._stop(deadline)
+            if stop is not None:
+                return ToolObservation(*fields, unprocessed=stop), stop
         try:
             result = self._gateway.handle(request, self._run, self._context)
         except Exception:
