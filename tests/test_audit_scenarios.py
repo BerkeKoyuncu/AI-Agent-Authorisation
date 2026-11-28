@@ -29,6 +29,7 @@ def test_persisted_normal_scenario_audit_matrix(tmp_path, case_id, mode, method)
         assert assessment.observation.run_id == result.run.run_id
         assert assessment.observation.effect is Evidence.SUCCESS
         assert assessment.observation.outcome.decision.allowed
+        assert assessment.observation.outcome.preliminary.decision.allowed and attempt.preliminary_allowed is True
         assert [row.event for row in assessment.records] == list(assessment.required_events)
         assert len(assessment.observation.outcome.timing.audit_writes_ns) == len(assessment.records)
     expected_lifecycle = mode is PolicyMode.C and case_id in {"N3", "N4", "N5"}

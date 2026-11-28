@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 
-from ..gateway.models import Execution, PolicyMode, Reason
+from ..gateway.models import Decision, Execution, PolicyMode, Reason
 from .observations import AttemptObservation, OutcomeObservation
 from .reader import Journal, JournalRecord
 from .schema import (
@@ -25,6 +25,7 @@ class Issue(StrEnum):
     MISSING_EVENT = "missing_event"
     UNCONFIRMED_WRITE = "unconfirmed_write"
     MISSING_TERMINAL_OBSERVATION = "missing_terminal_observation"
+    MISSING_PRELIMINARY_OBSERVATION = "missing_preliminary_observation"
     MISSING_VALIDATION_OBSERVATION = "missing_validation_observation"
     MISSING_BINDING_OBSERVATION = "missing_binding_observation"
     MISSING_OPERATION_OBSERVATION = "missing_operation_observation"
@@ -49,7 +50,7 @@ class Issue(StrEnum):
 
 
 _INCOMPLETE = {Issue.MISSING_CORRELATION, Issue.MISSING_EVENT, Issue.UNCONFIRMED_WRITE}
-_UNKNOWN = {Issue.MISSING_TERMINAL_OBSERVATION, Issue.MISSING_VALIDATION_OBSERVATION,
+_UNKNOWN = {Issue.MISSING_TERMINAL_OBSERVATION, Issue.MISSING_PRELIMINARY_OBSERVATION, Issue.MISSING_VALIDATION_OBSERVATION,
             Issue.MISSING_BINDING_OBSERVATION, Issue.MISSING_OPERATION_OBSERVATION}
 _STAGE_INDEX = {event: index for index, event in enumerate(EVENT_ORDER)}
 
@@ -287,12 +288,24 @@ def _check_path(
     return required
 
 
+def _compare_decision(row: JournalRecord, decision: Decision, problems: list[Problem]) -> None:
+    fields = row.fields
+    if (fields["allowed"], fields["reason"]) != (decision.allowed, decision.reason):
+        _record_problem(problems, Issue.DECISION_CONFLICT, row)
+    versions = tuple(fields[field] for field in VERSION_FIELDS)
+    if versions != (decision.versions.human, decision.versions.agent, decision.versions.delegation):
+        _record_problem(problems, Issue.VERSION_CONFLICT, row)
+
+
 def _check_decisions(
     observed: AttemptObservation, records: tuple[JournalRecord, ...], problems: list[Problem],
 ) -> None:
     # Keep the full sequence for duplicate detection and for checking every
     # conflicting row. These lookups only collect sets of reported values.
     outcome = observed.outcome
+    preliminary = outcome.preliminary if outcome is not None else None
+    if preliminary is None:
+        problems.append(Problem(Issue.MISSING_PRELIMINARY_OBSERVATION))
     stages: dict[str, list[JournalRecord]] = defaultdict(list)
     for row in records:
         stages[row.event].append(row)
@@ -306,21 +319,18 @@ def _check_decisions(
             elif (fields["valid"] is False and outcome and outcome.decision.reason is not Reason.AUDIT_UNAVAILABLE
                   and fields["reason"] != outcome.decision.reason):
                 _record_problem(problems, Issue.VALIDATION_CONFLICT, row)
-        elif row.event == "preliminary" and fields["allowed"] is False and outcome:
-            if outcome.decision.reason is not Reason.AUDIT_UNAVAILABLE and fields["reason"] != outcome.decision.reason:
+        elif row.event == "preliminary" and preliminary is not None:
+            if preliminary.decision is None:
                 _record_problem(problems, Issue.DECISION_CONFLICT, row)
+            else:
+                _compare_decision(row, preliminary.decision, problems)
         elif row.event == "dispatch_intent" and prior_denial:
             _record_problem(problems, Issue.DECISION_CONFLICT, row)
         elif row.event == "admission":
             if fields["allowed"] and prior_denial:
                 _record_problem(problems, Issue.DECISION_CONFLICT, row)
             if outcome:
-                decision = outcome.decision
-                if fields["allowed"] != decision.allowed or fields["reason"] != decision.reason:
-                    _record_problem(problems, Issue.DECISION_CONFLICT, row)
-                versions = tuple(fields[field] for field in VERSION_FIELDS)
-                if versions != (decision.versions.human, decision.versions.agent, decision.versions.delegation):
-                    _record_problem(problems, Issue.VERSION_CONFLICT, row)
+                _compare_decision(row, outcome.decision, problems)
         elif row.event in {"dispatch", "outcome", "lifecycle"}:
             if final_denial or (outcome is not None and not outcome.dispatched):
                 _record_problem(problems, Issue.DISPATCH_CONFLICT, row)

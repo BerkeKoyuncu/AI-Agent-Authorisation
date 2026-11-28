@@ -172,7 +172,7 @@ def _assess_attempts(
             result = call.gateway
             request_id = result.request_id if result is not None else None
             events = snapshots.events.get(request_id, {}) if request_id is not None else {}
-            preliminary = events.get("preliminary", {}).get("allowed")
+            preliminary = result.preliminary.decision if result is not None and result.preliminary is not None else None
             message = history.get(call.sequence)
             delivery = Evidence.SUCCESS if message is not None else Evidence.ABSENT
             submission = Evidence.SUCCESS if message in submitted else Evidence.ABSENT
@@ -186,7 +186,7 @@ def _assess_attempts(
                                  events.get(terminal_name, {}), delivered_data)
             observations.append(Attempt(
                 call.sequence, Disposition.FORWARDED, json.dumps(request, separators=(",", ":"), sort_keys=True),
-                request_id, invocation, label, lifecycle, preliminary if type(preliminary) is bool else None,
+                request_id, invocation, label, lifecycle, preliminary.allowed if preliminary is not None else None,
                 result.decision.allowed if result is not None else None,
                 result.dispatched if result is not None else None,
                 result.execution if result is not None else None, effect, delivery, submission, before, after,

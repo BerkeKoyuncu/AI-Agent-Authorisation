@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 
-from ..gateway.models import Decision, Execution, GatewayResult, Invocation, PolicyMode, RecordVersions, Timing
+from ..gateway.models import (
+    Decision, Execution, GatewayResult, Invocation, PolicyMode, PreliminaryObservation, RecordVersions, Timing,
+)
 from ..models import Action
 
 
@@ -38,11 +40,12 @@ class OutcomeObservation:
     lifecycle: str | None
     failed_writes: tuple[str, ...]
     timing: Timing
+    preliminary: PreliminaryObservation | None = None
 
     @classmethod
     def from_result(cls, result: GatewayResult) -> "OutcomeObservation":
         return cls(result.decision, result.dispatched, result.execution, result.execution_reason,
-                   result.lifecycle, result.failed_audit_events, result.timing)
+                   result.lifecycle, result.failed_audit_events, result.timing, result.preliminary)
 
 
 @dataclass(frozen=True, slots=True)

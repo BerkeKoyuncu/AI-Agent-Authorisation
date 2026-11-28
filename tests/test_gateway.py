@@ -540,13 +540,53 @@ def test_persisted_rejection_paths_have_no_effect_or_fabricated_binding(lab, run
     assert audit.globally_clean and audit.attempts[0].required_events == sequence
     assert not result.dispatched and not case.invocations and case.sandbox.snapshot() == before
     assert result.model_response() == {"status": "denied"} and result.data is None
+    assert observed.outcome.preliminary is not None
     if rejection == "structure":
+        assert observed.outcome.preliminary.decision is None
         assert all("tool" not in row.fields for row in audit.journal.records)
+    else:
+        decision = observed.outcome.preliminary.decision
+        assert decision is not None and not decision.allowed
+        assert decision.reason is result.decision.reason and decision.versions == result.decision.versions
     if rejection == "binding":
         assert all("run_id" not in row.fields and "session_id" not in row.fields for row in audit.journal.records)
     contradictory = assess_journal(audit.journal, [replace(observed, effect="observed_success")])
     assert contradictory.attempts[0].status is Status.INCONSISTENT
     assert Issue.EFFECT_CONFLICT.value in contradictory.issue_counts
+
+
+def test_audit_detects_a_preliminary_denial_changed_to_allow(lab, runtime, tmp_path):
+    path = tmp_path / "denial.jsonl"
+    case = lab(PolicyMode.C, audit_hook=JsonlAudit(path))
+    result, observed = observe_audit_call(case, runtime, request("read_document", "public_report.txt"))
+    assert result.decision.reason is Reason.OUTSIDE_TASK_SCOPE and not result.dispatched
+    assert assess_journal(read_journal(path), [observed]).globally_clean
+
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    preliminary, = (record for record in records if record["event"] == "preliminary")
+    assert not preliminary["allowed"]
+    preliminary.update(allowed=True, reason="ALLOWED")
+    copy = tmp_path / "changed.jsonl"
+    copy.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    journal = read_journal(copy)
+    assert not journal.problems
+    attempt, = assess_journal(journal, [observed]).attempts
+    assert attempt.status is Status.INCONSISTENT
+    assert any(problem.issue is Issue.DECISION_CONFLICT and problem.event == "preliminary"
+               for problem in attempt.problems)
+
+
+def test_audit_with_unavailable_preliminary_observation_is_unknown(lab, runtime, tmp_path):
+    path = tmp_path / "denial.jsonl"
+    case = lab(PolicyMode.C, audit_hook=JsonlAudit(path))
+    _, observed = observe_audit_call(case, runtime, request("read_document", "public_report.txt"))
+    journal = read_journal(path)
+    assert assess_journal(journal, [observed]).globally_clean
+
+    unavailable = replace(observed, outcome=replace(observed.outcome, preliminary=None))
+    audit = assess_journal(journal, [unavailable])
+    assert audit.attempts[0].status is Status.UNKNOWN
+    assert audit.issue_counts == {"missing_preliminary_observation": 1}
 
 
 @pytest.mark.parametrize("trigger", ["preliminary", "dispatch_intent"])
@@ -563,12 +603,26 @@ def test_persisted_late_denial_accepts_legitimate_version_change(lab, runtime, t
     result, observed = observe_audit_call(case, runtime, MEETING)
     assert not result.dispatched and not case.invocations
     assert result.decision.reason is Reason.DELEGATION_REVOKED
+    assert observed.outcome.preliminary.decision.allowed
+    assert observed.outcome.preliminary.decision.versions.delegation < result.decision.versions.delegation
     runtime.sessions.validate_run(case.run)
     audit = assess_journal(read_journal(path), [observed])
     assert audit.globally_clean
     records = audit.attempts[0].records
     assert ("dispatch_intent" in [row.event for row in records]) is (trigger == "dispatch_intent")
     assert records[2].fields["delegation_version"] < records[-1].fields["delegation_version"]
+    if trigger == "preliminary":
+        # A plausible but incorrect version within the before/after bounds.
+        rows = [dict(row.fields) for row in records]
+        rows[2]["delegation_version"] = result.decision.versions.delegation
+        copy = tmp_path / "changed-version.jsonl"
+        copy.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        journal = read_journal(copy)
+        assert not journal.problems
+        attempt, = assess_journal(journal, [observed]).attempts
+        assert attempt.status is Status.INCONSISTENT
+        assert any(problem.issue is Issue.VERSION_CONFLICT and problem.event == "preliminary"
+                   for problem in attempt.problems)
 
 
 @pytest.mark.parametrize("stage", ["attempt", "validation", "preliminary", "dispatch_intent"])
@@ -585,6 +639,7 @@ def test_persisted_pre_dispatch_fault_cannot_execute(lab, runtime, tmp_path, sta
     before = case.sandbox.snapshot()
     result, observation = observe_audit_call(case, runtime, MEETING)
     assert result.decision.reason is Reason.AUDIT_UNAVAILABLE and not result.dispatched
+    assert observation.outcome.preliminary.decision.allowed
     assert not case.invocations and case.sandbox.snapshot() == before
     audit = assess_journal(read_journal(path), [observation])
     assert audit.attempts[0].status is Status.INCOMPLETE

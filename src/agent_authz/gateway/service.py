@@ -17,7 +17,8 @@ from ..sandbox.errors import SandboxError
 from ..tasks import TASK_CATALOGUE
 from .executor import _Executor
 from .models import (
-    POLICY_VERSION, Decision, Execution, GatewayResult, Invocation, PolicyMode, Reason, RecordVersions, Timing, ToolData,
+    POLICY_VERSION, Decision, Execution, GatewayResult, Invocation, PolicyMode, PreliminaryObservation, Reason,
+    RecordVersions, Timing, ToolData,
 )
 from .policies import evaluate
 from .registry import ValidationError, canonicalise
@@ -43,6 +44,7 @@ class _Attempt:
     policy_ns: int | None = None
     enforcement_ns: int | None = None
     executor_ns: int | None = None
+    preliminary: Decision | None = None
 
 
 class Gateway:
@@ -176,6 +178,7 @@ class Gateway:
                 attempt.fields["destination"] = dict(invocation.arguments)["destination"]
             preliminary, _ = self._evaluate(attempt, invocation, run, context)
             attempt.policy_ns = self._monotonic() - attempt.start
+            attempt.preliminary = preliminary
         self._prepare_run(attempt, run)
 
         if not self._record(attempt, "attempt") or not self._record(
@@ -286,4 +289,5 @@ class Gateway:
             attempt.request_id, decision, execution, data, execution_reason, lifecycle, tuple(attempt.failed_events),
             Timing(attempt.policy_ns, attempt.enforcement_ns, attempt.executor_ns,
                    self._monotonic() - attempt.start - (attempt.executor_ns or 0), tuple(attempt.audit_writes)),
+            PreliminaryObservation(attempt.preliminary),
         )
