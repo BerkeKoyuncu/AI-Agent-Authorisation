@@ -90,6 +90,13 @@ class Timing:
 
 
 @dataclass(frozen=True, slots=True)
+class PreliminaryObservation:
+    """A captured decision, or confirmed non-occurrence when decision is None."""
+
+    decision: Decision | None
+
+
+@dataclass(frozen=True, slots=True)
 class GatewayResult:
     request_id: str
     decision: Decision
@@ -99,6 +106,7 @@ class GatewayResult:
     lifecycle: str | None
     failed_audit_events: tuple[str, ...]
     timing: Timing
+    preliminary: PreliminaryObservation | None = None
 
     @property
     def dispatched(self) -> bool:

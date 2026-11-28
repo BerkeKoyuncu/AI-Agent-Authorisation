@@ -6,6 +6,7 @@ from itertools import count
 from threading import get_ident
 from time import monotonic_ns
 
+from ..audit import AUDIT_SCHEMA_VERSION
 from ..delegation import DelegationManager, DelegationRecord, RuntimeExecutionContext
 from ..identity.errors import AuthorityError, ErrorCode as AuthorityCode
 from ..identity.principals import PrincipalKind
@@ -16,7 +17,8 @@ from ..sandbox.errors import SandboxError
 from ..tasks import TASK_CATALOGUE
 from .executor import _Executor
 from .models import (
-    POLICY_VERSION, Decision, Execution, GatewayResult, Invocation, PolicyMode, Reason, RecordVersions, Timing, ToolData,
+    POLICY_VERSION, Decision, Execution, GatewayResult, Invocation, PolicyMode, PreliminaryObservation, Reason,
+    RecordVersions, Timing, ToolData,
 )
 from .policies import evaluate
 from .registry import ValidationError, canonicalise
@@ -42,6 +44,7 @@ class _Attempt:
     policy_ns: int | None = None
     enforcement_ns: int | None = None
     executor_ns: int | None = None
+    preliminary: Decision | None = None
 
 
 class Gateway:
@@ -87,7 +90,7 @@ class Gateway:
 
     def _record(self, attempt: _Attempt, event: str, **fields: object) -> bool:
         record = {
-            **attempt.fields, "event": event, "timestamp": utc_now().isoformat(),
+            **attempt.fields, "schema_version": AUDIT_SCHEMA_VERSION, "event": event, "timestamp": utc_now().isoformat(),
             "request_id": attempt.request_id, "policy_mode": self._mode, "policy_version": POLICY_VERSION,
             "policy_ns": attempt.policy_ns, "enforcement_ns": attempt.enforcement_ns,
             "executor_ns": attempt.executor_ns, "prior_audit_writes_ns": tuple(attempt.audit_writes), **fields,
@@ -175,6 +178,7 @@ class Gateway:
                 attempt.fields["destination"] = dict(invocation.arguments)["destination"]
             preliminary, _ = self._evaluate(attempt, invocation, run, context)
             attempt.policy_ns = self._monotonic() - attempt.start
+            attempt.preliminary = preliminary
         self._prepare_run(attempt, run)
 
         if not self._record(attempt, "attempt") or not self._record(
@@ -285,4 +289,5 @@ class Gateway:
             attempt.request_id, decision, execution, data, execution_reason, lifecycle, tuple(attempt.failed_events),
             Timing(attempt.policy_ns, attempt.enforcement_ns, attempt.executor_ns,
                    self._monotonic() - attempt.start - (attempt.executor_ns or 0), tuple(attempt.audit_writes)),
+            PreliminaryObservation(attempt.preliminary),
         )

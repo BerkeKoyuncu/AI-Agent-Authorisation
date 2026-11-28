@@ -4,12 +4,17 @@ import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from ..agent.models import Message, Method, ModelAdapter, Role, RunLimits, RunResult, Termination, ToolProposal
 from ..agent.prompts import ReplayAdapter, StubAdapter
 from ..agent.runtime import AuthoritySnapshot, prepare_task
+from ..audit.completeness import AuditAssessment, assess_journal
+from ..audit.observations import AttemptObservation, BindingObservation, OperationObservation, OutcomeObservation
+from ..audit.reader import read_journal
 from ..gateway import Execution, PolicyMode
-from ..gateway.models import Invocation
+from ..gateway.audit import JsonlAudit
+from ..gateway.models import Invocation, RecordVersions
 from ..gateway.registry import ValidationError, canonicalise
 from ..sandbox import SandboxEnvironment
 from ..sandbox.environment import SandboxSnapshot
@@ -68,6 +73,7 @@ class ScenarioResult:
     completion: Evidence
     replay_conformance: Evidence
     objective: Evidence = Evidence.NOT_APPLICABLE
+    audit: AuditAssessment | None = None
 
     @property
     def unauthorised_attempts(self) -> tuple[Attempt, ...]:
@@ -166,7 +172,7 @@ def _assess_attempts(
             result = call.gateway
             request_id = result.request_id if result is not None else None
             events = snapshots.events.get(request_id, {}) if request_id is not None else {}
-            preliminary = events.get("preliminary", {}).get("allowed")
+            preliminary = result.preliminary.decision if result is not None and result.preliminary is not None else None
             message = history.get(call.sequence)
             delivery = Evidence.SUCCESS if message is not None else Evidence.ABSENT
             submission = Evidence.SUCCESS if message in submitted else Evidence.ABSENT
@@ -180,7 +186,7 @@ def _assess_attempts(
                                  events.get(terminal_name, {}), delivered_data)
             observations.append(Attempt(
                 call.sequence, Disposition.FORWARDED, json.dumps(request, separators=(",", ":"), sort_keys=True),
-                request_id, invocation, label, lifecycle, preliminary if type(preliminary) is bool else None,
+                request_id, invocation, label, lifecycle, preliminary.allowed if preliminary is not None else None,
                 result.decision.allowed if result is not None else None,
                 result.dispatched if result is not None else None,
                 result.execution if result is not None else None, effect, delivery, submission, before, after,
@@ -272,17 +278,59 @@ def _completion(
     return sequence, Evidence.SUCCESS if completed else Evidence.ABSENT
 
 
+def _versions(state: ObservedState | None) -> RecordVersions | None:
+    if state is None:
+        return None
+    authority = state.authority
+    return RecordVersions(authority.human.version, authority.agent.version,
+                          authority.delegation.version if authority.delegation else None)
+
+
+def _audit_inventory(
+    policy: PolicyMode, run: RunResult, attempts: tuple[Attempt, ...],
+) -> tuple[AttemptObservation, ...]:
+    results = {call.sequence: call.gateway for turn in run.turns for call in turn.calls}
+    inventory = []
+    for attempt in attempts:
+        if attempt.disposition is not Disposition.FORWARDED:
+            continue
+        authority = attempt.before.authority
+        context = authority.context
+        binding = BindingObservation(context.run.run_id, context.run.session_id, authority.human.principal_id,
+                                     authority.agent.principal_id, context.task_id, context.delegation_id)
+        gateway = results[attempt.sequence]
+        operation = OperationObservation.from_invocation(attempt.invocation) if attempt.invocation else None
+        inventory.append(AttemptObservation(
+            run.run_id, attempt.sequence, policy, gateway.request_id if gateway else None, binding,
+            attempt.invocation is not None, operation, OutcomeObservation.from_result(gateway) if gateway else None,
+            _versions(attempt.before), _versions(attempt.after), attempt.effect,
+        ))
+    return tuple(inventory)
+
+
 def run_scenario(
     case_id: str, policy: PolicyMode, method: Method = Method.REPLAY, *, limits: RunLimits = RunLimits(),
+    audit_path: Path | None = None,
 ) -> ScenarioResult:
-    """Execute only the catalogue's supported deterministic normal scenarios."""
+    """Execute a normal case and optionally assess a fresh persisted journal."""
     case = CASES[case_id]
     method = Method(method)
     policy = PolicyMode(policy)
     if method not in case.methods:
         raise ValueError(f"{case_id} has no executable {method} scenario.")
     snapshots = _Snapshots()
-    prepared = prepare_task(case.task_id, policy, snapshots.audit, limits=limits)
+    sink = snapshots.audit
+    if audit_path is not None:
+        audit_path = audit_path.resolve()
+        with audit_path.open("xb"):
+            pass
+        writer = JsonlAudit(audit_path)
+
+        def sink(event: dict[str, object]) -> None:
+            snapshots.audit(event)
+            writer(event)
+
+    prepared = prepare_task(case.task_id, policy, sink, limits=limits)
     snapshots.sandbox = prepared.sandbox
     snapshots.observe_authority = prepared.observe_authority
     before = prepared.sandbox.snapshot()
@@ -296,5 +344,9 @@ def run_scenario(
     after = prepared.sandbox.snapshot()
     attempts, lifecycle = _assess_attempts(case, run, snapshots, adapter.tool_messages)
     sequence, completion = _completion(case, method, run, attempts, before, after)
+    assessment = None
+    if audit_path is not None:
+        assessment = assess_journal(read_journal(audit_path), _audit_inventory(policy, run, attempts))
     return ScenarioResult(case, policy, method, fixture_fingerprint(before), before, after, run, attempts,
-                          lifecycle, sequence, completion, _replay_conformance(case, method, run, attempts))
+                          lifecycle, sequence, completion, _replay_conformance(case, method, run, attempts),
+                          audit=assessment)
