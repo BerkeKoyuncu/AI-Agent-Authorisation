@@ -190,6 +190,7 @@ class AgentRuntime:
             turns.append(TurnObservation(
                 number, turn.text, elapsed, inference, turn.status, len(proposals), tuple(outcomes), issue,
                 turn.model if safe_identifier(turn.model) else None, turn.digest if safe_identifier(turn.digest) else None,
+                turn.backend_timings_ns,
             ))
             if termination is not None:
                 break

@@ -50,13 +50,18 @@ class OllamaAdapter:
     def __init__(
         self, model: str, *, confirm_local_only: bool = False, endpoint: str = DEFAULT_ENDPOINT,
         connection_factory: Callable[..., HTTPConnection] = HTTPConnection,
+        expected_digest: str | None = None, context_length: int | None = None,
     ) -> None:
         if (confirm_local_only is not True or type(endpoint) is not str or endpoint != DEFAULT_ENDPOINT
                 or type(model) is not str or len(model) > 120 or not _MODEL_NAME.fullmatch(model)
-                or model.lower().endswith(("-cloud", ":cloud"))):
+                or model.lower().endswith(("-cloud", ":cloud"))
+                or (expected_digest is not None and (type(expected_digest) is not str or not _DIGEST.fullmatch(expected_digest)))
+                or (context_length is not None and (type(context_length) is not int or context_length < 1))):
             raise AgentError(Issue.INVALID_CONFIGURATION)
         self.backend = Backend(Method.LLM, "ollama-local", _canonical_model(model))
         self._connect = connection_factory
+        self.expected_digest = expected_digest.lower() if expected_digest is not None else None
+        self.context_length = context_length
 
     def _request(
         self, method: str, path: str, body: dict[str, object] | None, deadline: float, limit: int,
@@ -108,6 +113,8 @@ class OllamaAdapter:
         if type(capabilities) is not list or "tools" not in capabilities:
             raise AgentError(Issue.TOOLS_UNSUPPORTED)
         digest = entry.get("digest")
+        if self.expected_digest is not None and (type(digest) is not str or digest.lower() != self.expected_digest):
+            raise AgentError(Issue.MODEL_UNAVAILABLE)
         return digest if type(digest) is str and len(digest) == 64 and _DIGEST.fullmatch(digest) else None
 
     def generate(
@@ -118,11 +125,14 @@ class OllamaAdapter:
             raise AgentError(Issue.INVALID_CONFIGURATION)
         deadline = monotonic() + timeout
         digest = self._check_model(deadline, max_response_bytes)
+        options = {"temperature": settings.temperature, "seed": settings.seed, "num_predict": settings.max_tokens}
+        if self.context_length is not None:
+            options["num_ctx"] = self.context_length
         result = self._request("POST", "/api/chat", {
             "model": self.backend.model,
             "messages": [_message(message) for message in messages],
             "tools": [{"type": "function", "function": schema} for schema in schemas],
-            "options": {"temperature": settings.temperature, "seed": settings.seed, "num_predict": settings.max_tokens},
+            "options": options,
             "stream": False,
         }, deadline, max_response_bytes)
         if type(result) is not dict or type(result.get("message")) is not dict or type(result.get("done")) is not bool:
@@ -135,4 +145,7 @@ class OllamaAdapter:
             raise AgentError(Issue.INVALID_RESPONSE)
         status = (TurnStatus.READY if result["done"] and result.get("done_reason") in (None, "stop")
                   else TurnStatus.INCOMPLETE)
-        return ModelTurn(text, tuple(_proposal(call) for call in calls), status, model, digest)
+        timings = tuple((key, result[key]) for key in
+                        ("total_duration", "load_duration", "prompt_eval_duration", "eval_duration")
+                        if type(result.get(key)) is int and 0 <= result[key] < 2**63)
+        return ModelTurn(text, tuple(_proposal(call) for call in calls), status, model, digest, timings)
