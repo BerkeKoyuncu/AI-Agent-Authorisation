@@ -89,6 +89,7 @@ class ModelTurn:
     status: TurnStatus = TurnStatus.READY
     model: str | None = None
     digest: str | None = None
+    backend_timings_ns: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +173,7 @@ class TurnObservation:
     issue: Issue | None = None
     model: str | None = None
     digest: str | None = None
+    backend_timings_ns: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

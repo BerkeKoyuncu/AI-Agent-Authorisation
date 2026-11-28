@@ -6,7 +6,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from ..agent.models import Message, Method, ModelAdapter, Role, RunLimits, RunResult, Termination, ToolProposal
+from ..agent.models import GenerationSettings, Message, Method, ModelAdapter, Role, RunLimits, RunResult, Termination, ToolProposal
+from ..agent.ollama import OllamaAdapter
 from ..agent.prompts import ReplayAdapter, StubAdapter
 from ..agent.runtime import AuthoritySnapshot, prepare_task
 from ..audit.completeness import AuditAssessment, assess_journal
@@ -114,11 +115,16 @@ class _AdapterInputs:
         self._adapter = adapter
         self.backend = adapter.backend
         self.tool_messages: set[Message] = set()
+        self.received: set[Message] = set()
 
     def generate(self, messages, schemas, settings, *, timeout, max_response_bytes):
-        self.tool_messages.update(message for message in messages if message.role is Role.TOOL)
-        return self._adapter.generate(messages, schemas, settings, timeout=timeout,
+        submitted = {message for message in messages if message.role is Role.TOOL}
+        self.tool_messages.update(submitted)
+        turn = self._adapter.generate(messages, schemas, settings, timeout=timeout,
                                       max_response_bytes=max_response_bytes)
+        if self.backend.method is Method.LLM:
+            self.received.update(submitted)
+        return turn
 
 
 def _effect(
@@ -141,6 +147,7 @@ def _effect(
 
 def _assess_attempts(
     case: Case, run: RunResult, snapshots: _Snapshots, submitted: set[Message],
+    received: set[Message],
 ) -> tuple[tuple[Attempt, ...], Lifecycle]:
     task_id = case.task_id
     lifecycle = Lifecycle.ACTIVE
@@ -176,6 +183,11 @@ def _assess_attempts(
             message = history.get(call.sequence)
             delivery = Evidence.SUCCESS if message is not None else Evidence.ABSENT
             submission = Evidence.SUCCESS if message in submitted else Evidence.ABSENT
+            receipt = Evidence.NOT_APPLICABLE
+            if run.backend.method is Method.LLM:
+                receipt = Evidence.SUCCESS if message in received else (
+                    Evidence.UNKNOWN if message in submitted else Evidence.ABSENT
+                )
             effect = Evidence.UNKNOWN
             after = None
             if result is not None:
@@ -190,7 +202,7 @@ def _assess_attempts(
                 result.decision.allowed if result is not None else None,
                 result.dispatched if result is not None else None,
                 result.execution if result is not None else None, effect, delivery, submission, before, after,
-                history_content=message.content if message is not None else None,
+                backend_receipt=receipt, history_content=message.content if message is not None else None,
             ))
             if invocation is not None:
                 lifecycle = after_effect(task_id, lifecycle, invocation, effect)
@@ -251,6 +263,8 @@ def _completion(
         return sequence, Evidence.NOT_APPLICABLE
     if sequence is not Evidence.SUCCESS:
         return sequence, sequence
+    if method is Method.LLM and task_id in {"T1", "T2", "T3", "T6"}:
+        return sequence, Evidence.UNKNOWN  # The versioned evaluation rubric assesses live text.
 
     summary = after.documents["summary.txt"]
     if task_id == "T3":
@@ -310,14 +324,20 @@ def _audit_inventory(
 
 def run_scenario(
     case_id: str, policy: PolicyMode, method: Method = Method.REPLAY, *, limits: RunLimits = RunLimits(),
-    audit_path: Path | None = None,
+    audit_path: Path | None = None, settings: GenerationSettings = GenerationSettings(),
+    local_adapter: OllamaAdapter | None = None,
 ) -> ScenarioResult:
     """Execute a normal case and optionally assess a fresh persisted journal."""
     case = CASES[case_id]
     method = Method(method)
     policy = PolicyMode(policy)
-    if method not in case.methods:
+    if not case.methods or (method is not Method.LLM and method not in case.methods):
         raise ValueError(f"{case_id} has no executable {method} scenario.")
+    if method is Method.LLM:
+        if not isinstance(local_adapter, OllamaAdapter) or local_adapter.expected_digest is None:
+            raise ValueError("A trusted local Ollama adapter with a pinned digest is required.")
+    elif local_adapter is not None:
+        raise ValueError("Local Ollama is only available for the LLM method.")
     snapshots = _Snapshots()
     sink = snapshots.audit
     if audit_path is not None:
@@ -330,7 +350,7 @@ def run_scenario(
             snapshots.audit(event)
             writer(event)
 
-    prepared = prepare_task(case.task_id, policy, sink, limits=limits)
+    prepared = prepare_task(case.task_id, policy, sink, limits=limits, settings=settings)
     snapshots.sandbox = prepared.sandbox
     snapshots.observe_authority = prepared.observe_authority
     before = prepared.sandbox.snapshot()
@@ -338,11 +358,13 @@ def run_scenario(
         raise ValueError("Task fixture differs from the scenario specification.")
     if method is Method.REPLAY:
         adapter = _AdapterInputs(ReplayAdapter((ToolProposal(json.loads(raw)),) for raw in case.replay_json))
-    else:
+    elif method is Method.STUB:
         adapter = _AdapterInputs(StubAdapter(case.task_id))
+    else:
+        adapter = _AdapterInputs(local_adapter)
     run = prepared.runtime.run(adapter, observe_attempt=snapshots.capture)
     after = prepared.sandbox.snapshot()
-    attempts, lifecycle = _assess_attempts(case, run, snapshots, adapter.tool_messages)
+    attempts, lifecycle = _assess_attempts(case, run, snapshots, adapter.tool_messages, adapter.received)
     sequence, completion = _completion(case, method, run, attempts, before, after)
     assessment = None
     if audit_path is not None:

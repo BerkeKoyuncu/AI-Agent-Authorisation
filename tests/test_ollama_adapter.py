@@ -4,9 +4,13 @@ import pytest
 
 from agent_authz.agent.models import AgentError, GenerationSettings, Issue, Message, Method, Role, Termination, TurnStatus
 from agent_authz.agent.ollama import OllamaAdapter
+from agent_authz.agent.prompts import normal_proposals
 from agent_authz.agent.runtime import prepare_task
+from agent_authz.evaluation.rubric import Completion, assess_completion
 from agent_authz.gateway import Execution, PolicyMode, tool_schemas
-from agent_authz.sandbox.fixtures import MEETING_FACTS
+from agent_authz.sandbox.fixtures import AGENDA_LINE, FINANCIAL_FACTS, MEETING_FACTS
+from agent_authz.scenarios.authority import Evidence
+from agent_authz.scenarios.runner import run_scenario
 
 
 DIGEST = "f" * 64
@@ -121,6 +125,38 @@ def test_single_call_and_text_are_translated_without_executing_tools():
     assert result.text == "Checking" and result.status is TurnStatus.READY
     assert result.proposals[0].envelope == {"tool": "read_document", "arguments": {"resource_id": "meeting_notes.txt"}}
     assert len(transport.requests) == 3
+
+
+@pytest.mark.parametrize("mode", tuple(PolicyMode))
+@pytest.mark.parametrize("case", ("N1", "N2", "N3", "N4", "N5", "N6"))
+def test_normal_scenario_local_adapter_integration_uses_pinned_metadata(mode, case, tmp_path):
+    task = "T" + case[1:]
+    exchanges = []
+    for item in normal_proposals(task):
+        envelope = item.envelope
+        exchanges.extend((LOCAL, CAPABILITIES, response(calls=[call(envelope["tool"], envelope["arguments"])])))
+    text = {"N1": " ".join(MEETING_FACTS), "N2": " ".join(FINANCIAL_FACTS), "N6": AGENDA_LINE}.get(case, "Done.")
+    exchanges.extend((LOCAL, CAPABILITIES, response(text, eval_duration=10)))
+    transport = LocalTransport(exchanges)
+    local = OllamaAdapter("local-model", confirm_local_only=True, connection_factory=transport.connect,
+                          expected_digest=DIGEST, context_length=4096)
+    result = run_scenario(case, mode, Method.LLM, local_adapter=local, audit_path=tmp_path / "audit.jsonl",
+                          settings=GenerationSettings(seed=51))
+    assert result.audit.globally_clean and assess_completion(result).status is Completion.SUCCESS
+    assert result.run.turns[-1].backend_timings_ns == (("eval_duration", 10),)
+    assert all(attempt.backend_receipt is Evidence.SUCCESS for attempt in result.attempts)
+    assert all(item[2]["options"] == {"temperature": 0.0, "seed": 51, "num_predict": 1024, "num_ctx": 4096}
+               for item in transport.requests if item[1] == "/api/chat")
+
+
+def test_digest_mismatch_prevents_chat_submission():
+    transport = LocalTransport([LOCAL, CAPABILITIES])
+    local = OllamaAdapter("local-model", confirm_local_only=True, connection_factory=transport.connect,
+                          expected_digest="a" * 64)
+    with pytest.raises(AgentError) as error:
+        local.generate((), SCHEMAS, GenerationSettings(), timeout=1, max_response_bytes=4096)
+    assert error.value.issue is Issue.MODEL_UNAVAILABLE
+    assert all(request[1] != "/api/chat" for request in transport.requests)
 
 
 @pytest.mark.parametrize(("bad_response", "issue"), [

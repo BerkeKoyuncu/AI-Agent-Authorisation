@@ -60,7 +60,7 @@ python -m agent_authz.agent.demo --backend replay --policy C --task T1
 python -m agent_authz.agent.demo --backend ollama --model MODEL_NAME --confirm-local-only --policy C --task T1
 ```
 
-Replace `MODEL_NAME` with the installed local tag. For a real T1 smoke test, check the tool proposal and successful gateway read, then check whether the final answer includes both fixture meeting facts. The Phase 6 validation machine had no Ollama listener on port 11434. Mock HTTP tests exercised the protocol and a complete conversation. Real inference and model behaviour remain unverified.
+Replace `MODEL_NAME` with the installed local tag. For a real T1 smoke test, check the tool proposal and successful gateway read, then check whether the final answer includes both fixture meeting facts. The Phase 6 validation used mocked HTTP. The later local T1 smoke test under System C verified successful inference, the admitted read and both meeting facts. [Smoke-test evidence and limits](evaluation-implementation.md#integration-smoke-test)
 
 ## Run budgets and observations
 

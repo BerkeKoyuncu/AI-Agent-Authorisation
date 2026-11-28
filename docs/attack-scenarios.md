@@ -120,7 +120,7 @@ The revised scope closes offline control validation. The following parts of the 
 | 13. Verify X14 identity-effect separation | The passive scorer distinguishes the outcomes. No scenario exercised the specified identity claim. |
 | 14–15. Verify fixture fingerprints, run isolation, effects and delivery | These checks cover normal runs. X-case fixture preparation and end-to-end observations remain unavailable. |
 
-The manifest has exactly 20 versioned specifications under criterion 4. Live inference remains unverified, and no X-case objective has been scored from a completed trial. Missing-evidence tests and the schema-only inventory check cover criteria 16 and 17 within the revised scope.
+The manifest has exactly 20 versioned specifications under criterion 4. A later live T1 smoke test verified normal integration under System C. No X-case objective has been scored from a completed trial. Missing-evidence tests and the schema-only inventory check cover criteria 16 and 17 within the revised scope. [Smoke-test evidence](evaluation-implementation.md#integration-smoke-test)
 
 ## Running and verifying
 
