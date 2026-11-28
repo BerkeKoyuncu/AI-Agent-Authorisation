@@ -12,7 +12,7 @@ from statistics import median
 from .manifest import Manifest
 from .permissions import analyse_permissions, permission_summary
 from .rubric import Completion
-from .store import atomic_text, read_results, write_json
+from .store import atomic_text, read_json, read_results, write_json
 
 
 def _jsonl(path: Path, rows: list[dict]) -> None:
@@ -45,20 +45,38 @@ def review_rows(results: list[dict]) -> list[dict]:
                   key=lambda review: review["review_id"])
 
 
+def _validate_review(row: object, known: set[str]) -> None:
+    if (type(row) is not dict or row.keys() != {"review_id", "status", "reason"}
+            or type(row["review_id"]) is not str or row["review_id"] not in known
+            or row["status"] not in (Completion.SUCCESS, Completion.FAILURE, Completion.UNKNOWN)
+            or type(row["reason"]) is not str or not row["reason"].strip() or len(row["reason"]) > 4096):
+        raise ValueError("Invalid or unknown semantic review.")
+
+
+def _stored_reviews(path: Path, known: set[str]) -> dict:
+    if not path.exists():
+        return {}
+    current = read_json(path)
+    if type(current) is not dict:
+        raise ValueError("Invalid stored semantic reviews.")
+    for key, row in current.items():
+        _validate_review(row, known)
+        if key != row["review_id"]:
+            raise ValueError("Stored semantic review ID mismatch.")
+    return current
+
+
 def import_reviews(root: Path, results: list[dict], source: Path) -> int:
     known = {row["review_id"] for row in review_rows(results)}
     submitted = {}
     for line in source.read_text(encoding="utf-8").splitlines():
         row = json.loads(line)
-        if (type(row) is not dict or row.keys() != {"review_id", "status", "reason"}
-                or type(row["review_id"]) is not str or row["review_id"] not in known
-                or row["status"] not in (Completion.SUCCESS, Completion.FAILURE, Completion.UNKNOWN)
-                or type(row["reason"]) is not str or not row["reason"].strip()
-                or len(row["reason"]) > 4096 or row["review_id"] in submitted):
-            raise ValueError("Invalid, duplicate or unknown semantic review.")
+        _validate_review(row, known)
+        if row["review_id"] in submitted:
+            raise ValueError("Duplicate semantic review.")
         submitted[row["review_id"]] = row
     path = root / "review-decisions.json"
-    current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    current = _stored_reviews(path, known)
     if any(key in current and current[key] != row for key, row in submitted.items()):
         raise ValueError("A recorded review cannot be silently replaced.")
     write_json(path, {**current, **submitted})
@@ -169,8 +187,9 @@ def policy_order(manifest: Manifest, results: list[dict]) -> list[dict]:
 def export_results(root: Path, manifest: Manifest) -> None:
     results = read_results(root, manifest)
     path = root / "review-decisions.json"
-    reviews = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    _jsonl(root / "semantic-review.jsonl", [row for row in review_rows(results) if row["review_id"] not in reviews])
+    review_records = review_rows(results)
+    reviews = _stored_reviews(path, {row["review_id"] for row in review_records})
+    _jsonl(root / "semantic-review.jsonl", [row for row in review_records if row["review_id"] not in reviews])
     safe_rows, flat_attempts, audit_rows, missing = [], [], [], []
     groups: dict[tuple[str, str, str, str], list[dict]] = {
         ("T" + trial.case[1:], trial.policy, trial.method, trial.condition): [] for trial in manifest.trials
@@ -189,7 +208,13 @@ def export_results(root: Path, manifest: Manifest) -> None:
         trial_with_attempts = {**row, "attempts": clean}
         groups[(row["task"], row["policy"], row["method"], row["condition"])].append(trial_with_attempts)
         if not row["measurement_valid"] or row["completion"] in (Completion.UNKNOWN, Completion.REVIEW):
-            missing.append({**identity, "sequence": None, "issue": row.get("issue", row["completion"])})
+            missing.append({**identity, "sequence": None, "issue": row.get("issue", row["completion"]),
+                            "detail": row["completion_reason"]})
+        evidence = row["completion_evidence"]
+        if evidence is not None:
+            for key in ("tool_sequence", "replay_conformance"):
+                if evidence[key] == "unknown":
+                    missing.append({**identity, "sequence": None, "issue": f"missing_{key}"})
         for attempt in clean:
             flat_attempts.append({**identity, **attempt, "measurement_valid": row["measurement_valid"]})
             if attempt["disposition"] == "forwarded":
@@ -220,6 +245,6 @@ def export_results(root: Path, manifest: Manifest) -> None:
     _csv(root / "timing-summary.csv", timings, (*keys, "model_state", "measure", "sample_count", "median_ns", "p95_ns"))
     _csv(root / "audit-summary.csv", audit_rows, ("trial_id", *keys, "observed", "complete", "incomplete",
                                                 "inconsistent", "unknown", "invalid", "orphan", "uncorrelated"))
-    _csv(root / "missing-observations.csv", missing, ("trial_id", *keys, "sequence", "issue"))
+    _csv(root / "missing-observations.csv", missing, ("trial_id", *keys, "sequence", "issue", "detail"))
     _csv(root / "policy-order.csv", policy_order(manifest, results),
          ("method", "policy", "position", "planned", "observed_complete_groups"))

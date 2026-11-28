@@ -18,9 +18,12 @@ from ..scenarios.evidence import fixture_fingerprint
 from .permissions import permission_candidates
 
 
-PROTOCOL_VERSION = "normal-evaluation-v1"
+PROTOCOL_VERSION = "normal-evaluation-v1.1"
 GROUND_TRUTH_VERSION = "phase7-task-contract-v1"
-RUBRIC_VERSION = "normal-completion-v1"
+RUBRIC_VERSION = "normal-completion-v2"
+RESULT_SCHEMA_VERSION = 2
+WARM_RAM_FLOOR = 2 * 1024**3
+COLD_RAM_FLOOR = 4 * 1024**3
 MODEL_TAG = "qwen3:4b-instruct-2507-q4_K_M"
 MODEL_DIGEST = "0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0"
 OLLAMA_VERSION = "0.40.19"
@@ -54,6 +57,7 @@ class Manifest:
     audit_schema_version: int
     ground_truth_version: str
     rubric_version: str
+    result_schema_version: int
     model_config: tuple[tuple[str, object], ...]
     execution_platform: tuple[tuple[str, str], ...]
     settings: GenerationSettings
@@ -103,12 +107,14 @@ def make_manifest(experiment_id: str, revision: str, profile: str) -> Manifest:
              ("format", "gguf"), ("quantisation", "Q4_K_M"), ("installed_bytes", 2497293803),
              ("host", "127.0.0.1:11434"), ("cloud_disabled", True), ("context_length", CONTEXT_LENGTH),
              ("parallel_requests", 1), ("expected_processor", "CPU"),
+             ("warm_ram_floor_bytes", WARM_RAM_FLOOR), ("cold_ram_floor_bytes", COLD_RAM_FLOOR),
              ("reference_hardware", "Intel i9-13900H, 14 cores/20 threads, 16 GiB RAM, Intel Iris Xe"))
     execution_platform = (("os", platform.system()), ("os_version", platform.version()),
                           ("machine", platform.machine()), ("python", platform.python_version()))
     return Manifest(
         experiment_id, revision, profile, PROTOCOL_VERSION, MANIFEST_VERSION, cases, schema_hash, PROMPT_VERSION,
-        POLICY_VERSION, AUDIT_SCHEMA_VERSION, GROUND_TRUTH_VERSION, RUBRIC_VERSION, model, execution_platform,
+        POLICY_VERSION, AUDIT_SCHEMA_VERSION, GROUND_TRUTH_VERSION, RUBRIC_VERSION, RESULT_SCHEMA_VERSION,
+        model, execution_platform,
         GenerationSettings(), RunLimits(),
         tuple((case_id, "scenario execution unsupported") for case_id in CASES if not CASES[case_id].methods),
         ("Unconfirmed decisions and effects are missing evidence.", "Pending reviews are unevaluable.",

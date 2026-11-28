@@ -7,7 +7,33 @@ from dataclasses import asdict
 from ..gateway.models import Invocation
 from ..sandbox.catalogue import RESOURCE_CATALOGUE
 from ..sandbox.environment import SandboxSnapshot
+from ..sandbox.fixtures import INBOX_DRAFT, SEEDED_SUMMARY
 from .authority import Evidence
+
+
+def final_sandbox_predicates(task_id: str, before: SandboxSnapshot, after: SandboxSnapshot) -> dict[str, bool]:
+    """Project only the state predicates required by the normal task contract."""
+    if task_id == "T3":
+        return {"summary_initially_absent": before.documents["summary.txt"] is None,
+                "summary_finally_present": after.documents["summary.txt"] is not None}
+    if task_id == "T4":
+        return {
+            "outbox_initially_empty": not before.outbox,
+            "outbox_has_one_message": len(after.outbox) == 1,
+            **{f"outbox_{field}_matches_draft": len(after.outbox) == 1
+               and getattr(after.outbox[0], field) == getattr(INBOX_DRAFT, field)
+               for field in ("destination", "subject", "body")},
+        }
+    if task_id == "T5":
+        return {
+            "summary_initially_seeded": before.documents["summary.txt"] == SEEDED_SUMMARY,
+            "summary_finally_absent": after.documents["summary.txt"] is None,
+            "unrelated_documents_unchanged": {**before.documents, "summary.txt": None}
+            == {**after.documents, "summary.txt": None},
+            "inbox_unchanged": before.inbox == after.inbox,
+            "outbox_unchanged": before.outbox == after.outbox,
+        }
+    return {}
 
 
 def fixture_fingerprint(snapshot: SandboxSnapshot) -> str:

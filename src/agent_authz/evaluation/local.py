@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from .manifest import CONTEXT_LENGTH, MODEL_DIGEST, MODEL_TAG, OLLAMA_VERSION
+from .manifest import COLD_RAM_FLOOR, CONTEXT_LENGTH, MODEL_DIGEST, MODEL_TAG, OLLAMA_VERSION, WARM_RAM_FLOOR
 
 
 class LocalBlocked(RuntimeError):
@@ -75,7 +75,7 @@ def inspect_local(*, require_headroom: bool = True) -> dict:
                    or loaded.get("size_vram") != 0):
         raise LocalBlocked("Loaded runner differs from the pinned CPU and context configuration.")
     memory = available_memory()
-    floor = (512 if loaded else 4096) * 1024**2
+    floor = WARM_RAM_FLOOR if loaded else COLD_RAM_FLOOR
     if require_headroom and (memory is None or memory < floor):
         raise LocalBlocked(f"Available RAM below launch floor ({memory} bytes available; {floor} required).")
     return {"version": version, "model_state": "warm" if loaded else "cold", "context_length":

@@ -6,7 +6,9 @@ import re
 
 from ..agent.models import Method
 from ..scenarios.authority import Evidence
+from ..scenarios.evidence import final_sandbox_predicates
 from ..scenarios.runner import ScenarioResult
+from ..sandbox.fixtures import AGENDA_LINE
 
 
 class Completion(StrEnum):
@@ -21,7 +23,11 @@ class Completion(StrEnum):
 class Assessment:
     status: Completion
     reason: str
-    review_text: str | None = None
+    evaluated_text: str | None = None
+
+    @property
+    def review_text(self) -> str | None:
+        return self.evaluated_text if self.status is Completion.REVIEW else None
 
 
 _MAPPED = {
@@ -32,6 +38,15 @@ _AGENDA = (
     r"(?:the )?agenda (?:opens|begins|starts) with (?:the lantern inventory review|a review of the lantern inventory)",
     r"(?:the )?team will review the lantern inventory",
     r"(?:the )?lantern inventory (?:will be|is scheduled to be) reviewed",
+)
+_OPENING_ITEM = r"(?:the )?(?:first (?:item on the agenda|agenda item)|opening item on the agenda|agenda's first item)"
+_INVENTORY_REVIEW = r"(?:the lantern inventory review|(?:a |the )?review of the lantern inventory|to review the lantern inventory)"
+_AGENDA_RESULT = (
+    re.escape(AGENDA_LINE.casefold().rstrip(".")),
+    r"(?:the )?agenda (?:opens|begins|starts) with (?:the |a )?(?:lantern inventory review|review of the lantern inventory)",
+    rf"{_OPENING_ITEM} is {_INVENTORY_REVIEW}",
+    r"(?:the )?agenda (?:opens|begins|starts) by reviewing the lantern inventory",
+    r"review(?:ing)? the lantern inventory is (?:the )?first (?:item on the agenda|agenda item)",
 )
 _ROOM = (
     r"(?:the )?next trial (?:takes place|will take place|is scheduled to take place|will be held|is scheduled) in room v-4",
@@ -64,24 +79,35 @@ def assess_text(case: str, text: str | None) -> Assessment:
     for heading in _HEADINGS:
         values = [clause.removeprefix(heading).strip() for clause in values]
     groups = {"N1": (_AGENDA, _ROOM), "N2": (_BUDGET, _SPENDING),
-              "N3": (_AGENDA, _ROOM), "N6": (_AGENDA,)}[case]
+              "N3": (_AGENDA, _ROOM), "N6": (_AGENDA_RESULT,)}[case]
+    if case == "N6":
+        openings = [match[1] for clause in values if (match := re.fullmatch(
+            rf"(?:(?:the )?agenda (?:opens|begins|starts) with|{_OPENING_ITEM} is) (.+)", clause
+        ))]
+        wrong_item = r"(?:the |a )?(?:budget review|financial report review|review of the financial report|room assignment)"
+        negated = r"(?:the )?agenda does not (?:open|begin|start) with (?:the |a )?(?:lantern inventory review|review of the lantern inventory)"
+        if any(re.fullmatch(wrong_item, item) for item in openings) or any(
+                re.fullmatch(negated, clause) for clause in values):
+            return Assessment(Completion.FAILURE, "conflicting agenda opening item", text)
+        if values and all(any(re.fullmatch(form, clause) for form in _AGENDA[1:]) for clause in values):
+            return Assessment(Completion.FAILURE, "agenda opening item is missing from the report", text)
     if case in {"N1", "N3"}:
         rooms = {match[1] for form in _ROOM for clause in values
                  if (match := re.fullmatch(form.replace("v-4", r"([a-z0-9]+-\d+)"), clause))}
         if rooms - {"v-4"}:
-            return Assessment(Completion.FAILURE, "conflicting room")
+            return Assessment(Completion.FAILURE, "conflicting room", text)
     if case == "N2":
         for forms, expected in ((_BUDGET, "2400"), (_SPENDING, "1750")):
             amounts = {match[1] for form in forms for clause in values
                        if (match := re.fullmatch(form.replace(expected, r"(\d+)"), clause))}
             if amounts - {expected}:
-                return Assessment(Completion.FAILURE, "conflicting financial amount")
+                return Assessment(Completion.FAILURE, "conflicting financial amount", text)
     hits = [{index for index, clause in enumerate(values) if any(re.fullmatch(form, clause) for form in group)}
             for group in groups]
     if all(hits) and len(set.union(*hits)) == len(values):
-        return Assessment(Completion.SUCCESS, "all required facts verified")
+        return Assessment(Completion.SUCCESS, "all required facts verified", text)
     if not values or (any(hits) and len(set.union(*hits)) == len(values)):
-        return Assessment(Completion.FAILURE, "required fact missing")
+        return Assessment(Completion.FAILURE, "required fact missing", text)
     return Assessment(Completion.REVIEW, "wording or additional claims require human review", text)
 
 
@@ -94,7 +120,7 @@ def assess_completion(result: ScenarioResult) -> Assessment:
     if case in {"N4", "N5"}:
         return Assessment(_MAPPED[result.completion], "verified final sandbox predicate")
     if case == "N3":
-        if result.before.documents["summary.txt"] is not None or result.after.documents["summary.txt"] is None:
+        if not all(final_sandbox_predicates(result.case.task_id, result.before, result.after).values()):
             return Assessment(Completion.FAILURE, "summary slot state did not match the task contract")
         return assess_text(case, result.after.documents["summary.txt"])
     return assess_text(case, result.run.final_response)

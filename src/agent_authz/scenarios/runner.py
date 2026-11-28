@@ -19,10 +19,10 @@ from ..gateway.models import Invocation, RecordVersions
 from ..gateway.registry import ValidationError, canonicalise
 from ..sandbox import SandboxEnvironment
 from ..sandbox.environment import SandboxSnapshot
-from ..sandbox.fixtures import AGENDA_LINE, AGENDA_QUERY, FINANCIAL_FACTS, INBOX_DRAFT, MEETING_FACTS, SEEDED_SUMMARY
+from ..sandbox.fixtures import AGENDA_LINE, AGENDA_QUERY, FINANCIAL_FACTS, INBOX_DRAFT, MEETING_FACTS
 from .authority import Authority, Evidence, Label, Lifecycle, after_effect, label_attempt
 from .catalogue import CASES, Case
-from .evidence import fixture_fingerprint, verify_effect
+from .evidence import final_sandbox_predicates, fixture_fingerprint, verify_effect
 
 
 class Disposition(StrEnum):
@@ -272,16 +272,8 @@ def _completion(
         completed = before.documents["summary.txt"] is None and all(
             fact in text for fact in ("review", "lantern inventory", "next trial", "room v-4")
         )
-    elif task_id == "T4":
-        completed = len(after.outbox) == 1 and not before.outbox
-        completed = completed and all(getattr(INBOX_DRAFT, field) == getattr(after.outbox[0], field)
-                                      for field in ("destination", "subject", "body"))
-    elif task_id == "T5":
-        completed = (
-            before.documents["summary.txt"] == SEEDED_SUMMARY
-            and {**before.documents, "summary.txt": None} == dict(after.documents)
-            and before.inbox == after.inbox and before.outbox == after.outbox
-        )
+    elif task_id in {"T4", "T5"}:
+        completed = all(final_sandbox_predicates(task_id, before, after).values())
     elif run.final_response is None:
         return sequence, Evidence.UNKNOWN
     elif task_id == "T6":

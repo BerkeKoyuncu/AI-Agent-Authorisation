@@ -32,7 +32,7 @@ The gateway evaluates each requested action independently of any model. Under th
 - [Model adapter and runtime implementation](docs/llm-integration-design.md)
 - [Scenario specifications and control validation](docs/attack-scenarios.md)
 - [Audit logging and security validation](docs/audit-security-design.md)
-- [Normal evaluation protocol v1](docs/evaluation-protocol-v1.md)
+- [Normal evaluation protocol v1.1](docs/evaluation-protocol-v1.md)
 - [Development roadmap](docs/roadmap.md)
 - [Phase 1 design notes](docs/design-notes.md)
 
